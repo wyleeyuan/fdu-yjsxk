@@ -12,9 +12,7 @@ config.json
 
 # 系统文件
 .DS_Store
-
-# 原仓库备份（原作者未附 LICENSE，保留所有权利，不参与本仓库分发）
-原版备份/
+Thumbs.db
 
 # 编辑器
 .idea/

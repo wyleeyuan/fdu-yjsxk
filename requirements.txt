@@ -1,2 +1,4 @@
+# Python 环境要求：Python 3.9+（推荐 3.10 ~ 3.13）
+# 依赖包：
 requests>=2.28
 browser-cookie3>=0.19

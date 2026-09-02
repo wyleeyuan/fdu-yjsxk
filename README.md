@@ -17,7 +17,30 @@
 | 配置 | 改源码里的全局变量 | 独立 `config.json`，不用动代码 |
 | 自检 | 无 | `--dry-run` 环境自检 |
 
+## 环境要求
+
+- **Python 3.9+**（推荐 3.10 ~ 3.13，3.13 实测可用）
+- 依赖包只有两个：`requests`、`browser-cookie3`，见 `requirements.txt`
+
+```bash
+pip install -r requirements.txt
+```
+
 ## 快速开始
+
+### 一键双击（推荐）
+
+先在浏览器（Edge 或 Chrome）登录一次选课系统，然后：
+
+| 平台 | 自检（先跑） | 抢课 |
+|---|---|---|
+| macOS | 双击 `先跑自检.command` | 双击 `一键抢课.command` |
+| Windows | 双击 `先跑自检.bat` | 双击 `一键抢课.bat` |
+
+> macOS 首次双击 `.command` 若被系统拦截，右键 →「打开」即可。
+> Windows 的 `.bat` 会先自动检测并安装依赖，再运行。
+
+### 命令行
 
 ```bash
 # 1. 安装依赖
@@ -31,8 +54,6 @@ python grab.py --dry-run
 # 4. 抢课（会等到 config.json 里的 start_time 再开始）
 python grab.py
 ```
-
-macOS 用户也可以直接双击 `先跑自检.command` 和 `一键抢课.command`。
 
 ## 命令行参数
 
