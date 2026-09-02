@@ -1,6 +1,6 @@
-# 复旦大学研究生选课脚本（2026 版重写）
+# fdu-yjsxk · 复旦大学研究生选课脚本
 
-一个用于复旦大学研究生选课系统（`yjsxk.fudan.edu.cn`）的自动抢课脚本。
+一个用于复旦大学研究生选课系统（`yjsxk.fudan.edu.cn`）的自动抢课脚本，2026 版协议重写。
 
 本项目基于 [JarynWong/fdu_course_enrollment](https://github.com/JarynWong/fdu_course_enrollment) 重写。
 原脚本基于 2024 年的选课协议，在 2026 年的系统上已多处失效，本仓库按当前系统的真实接口逻辑

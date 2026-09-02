@@ -12,7 +12,6 @@
   2. 选课是异步两步：choiceCourse.do 只返回受理号 xid（code!=0 不代表选上），
      必须再轮询 loadXkjgRes.do，拿到 {code:1} 才是真的选上。
      原脚本 code!=0 就打印"提交选课成功"并退出，会漏课。
-  3. 新增 secretKey 参数（URL 带 secretKey 时才需要）与 GS_SESSIONID cookie。
 
 用法：
     python grab.py            正常跑（会等到 start_time 再开始）
@@ -197,7 +196,6 @@ class Grabber:
         self.session = requests.Session()
         self.token: str | None = None
 
-    # 每次换 Cookie 都要更新请求头
     def set_cookie(self, cookie: str) -> None:
         self.cookie = cookie
 
@@ -323,15 +321,12 @@ def wait_until(target: dt.datetime, label: str) -> None:
         time.sleep(min(step, remain))
 
 
-def countdown_banner(deadline: dt.datetime) -> None:
+def countdown_banner(deadline: dt.datetime, n_courses: int) -> None:
     log("=" * 46)
     log("  复旦研究生选课 · 已就绪")
     log(f"  目标时间 {deadline.strftime('%Y-%m-%d %H:%M:%S')}")
-    log(f"  待抢课程 {len([c for c in CFG_PENDING])} 门")
+    log(f"  待抢课程 {n_courses} 门")
     log("=" * 46)
-
-
-CFG_PENDING: list = []
 
 
 def run(cfg: dict, start_now: bool) -> int:
@@ -345,9 +340,6 @@ def run(cfg: dict, start_now: bool) -> int:
     if not pending:
         log("没有启用任何课程，退出")
         return 0
-
-    global CFG_PENDING
-    CFG_PENDING = pending
 
     # ---- 取 Cookie 并自检 ----
     log("正在获取 Cookie ...")
@@ -365,7 +357,7 @@ def run(cfg: dict, start_now: bool) -> int:
             log("  脚本不会自动改到明天，现在直接开始。")
             log("=" * 46)
         else:
-            countdown_banner(start_time)
+            countdown_banner(start_time, len(pending))
             # 临近开抢前 3 分钟换一次新 Cookie，避免等待期间过期
             prewarm = start_time - dt.timedelta(seconds=180)
             if prewarm > dt.datetime.now():
