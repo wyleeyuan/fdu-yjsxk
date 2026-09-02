@@ -1,0 +1,49 @@
+{
+  "_说明": "抢课配置示例。复制为 config.json 后填入你自己的信息。start_time/end_time 格式：YYYY-MM-DD HH:MM:SS",
+  "_字段含义": {
+    "bjdm": "班级代码，形如「学年学期 + 课程代码 + .班号」，需从选课系统抓取（不同年级前缀不同，别照抄示例）",
+    "lx": "课程大类编码：7=学位公共课 8=学科专业课(含学位基础课/学位专业课/专业选修课) 9=公共选修课",
+    "bqmc": "子分类编号：1=政治理论课 2=第一外国语 3=专业外语 4=学位基础课 5=学位专业课 6=专业选修课",
+    "enabled": "是否参与抢课，false 表示跳过",
+    "serial_mode": "true=一门一门来：提交后等这门的结果出来，再提交下一门。选课系统的结果轮询是单例的，并发提交会丢结果，务必保持 true",
+    "poll_max": "一门课最多轮询几次（串行模式下建议别太大，免得卡住后面的课）"
+  },
+
+  "target": "yjsxk.fudan.edu.cn",
+  "start_time": "2026-09-02 09:59:55",
+  "end_time": "2026-09-02 10:30:00",
+
+  "cookie_source": "auto",
+  "browser": "edge",
+  "cookie_refresh_secs": 240,
+
+  "request_interval": 0.8,
+  "poll_interval": 0.6,
+  "poll_max": 15,
+  "http_timeout": 12,
+
+  "serial_mode": true,
+
+  "_课程顺序": "串行模式下顺序即优先级，建议按容量从小到大排：最难抢的先下手。bjdm 只是示例，务必换成你自己的",
+
+  "courses": [
+    {
+      "name": "示例课程A",
+      "kcdm": "XXXXXXX",
+      "bjdm": "2026202701XXXXXXX.01",
+      "lx": "8",
+      "bqmc": "6",
+      "enabled": true,
+      "_note": "把 name/kcdm/bjdm 换成你自己的课程；_note 是注释可删"
+    },
+    {
+      "name": "示例课程B",
+      "kcdm": "XXXXXXX",
+      "bjdm": "2026202701XXXXXXX.02",
+      "lx": "7",
+      "bqmc": "1",
+      "enabled": false,
+      "_note": "enabled=false 表示这轮不抢"
+    }
+  ]
+}
