@@ -2,21 +2,6 @@
 
 一个用于复旦大学研究生选课系统（`yjsxk.fudan.edu.cn`）的自动抢课脚本，2026 版协议重写。
 
-本项目基于 [JarynWong/fdu_course_enrollment](https://github.com/JarynWong/fdu_course_enrollment) 重写。
-原脚本基于 2024 年的选课协议，在 2026 年的系统上已多处失效，本仓库按当前系统的真实接口逻辑
-重新实现，并补上了原版缺失的一键 Cookie 读取、串行选课、链路自检等能力。
-
-## 与原版的区别
-
-| | 原版 course.py | 本仓库 grab.py |
-|---|---|---|
-| csrfToken 提取 | `value='...'` 单引号，已失效 | 兼容单/双引号，实测可用 |
-| 选课结果判定 | `code!=0` 就当成功 | 两步异步：提交拿 `xid` → 轮询 `code==1` 才算选上 |
-| Cookie | 手动 F12 复制 | 自动读浏览器本地库（含 HttpOnly） |
-| 多门课 | 一轮全提交 | 串行（系统轮询是单例，并发会丢结果） |
-| 配置 | 改源码里的全局变量 | 独立 `config.json`，不用动代码 |
-| 自检 | 无 | `--dry-run` 环境自检 |
-
 ## 文件结构
 
 仓库已按用途分目录整理：
@@ -187,7 +172,3 @@ python src/grab.py --probe     # 链路演练：发 1 次真实请求看服务�
 - 请控制请求频率、及时停止程序，**避免给学校服务器带来过大压力**。
 - 请遵守学校相关规定，使用本程序产生的任何后果由使用者自行承担。
 
-## 许可
-
-本项目为重写实现，代码可自由参考。原项目 [JarynWong/fdu_course_enrollment](https://github.com/JarynWong/fdu_course_enrollment)
-未附带 LICENSE，如需使用原版代码请自行联系原作者。
