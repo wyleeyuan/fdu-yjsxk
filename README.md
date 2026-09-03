@@ -32,28 +32,29 @@ pip install -r requirements.txt
 
 ## 快速开始
 
-> ⚠️ **重要：无论用哪种方式，跑「自检」之前，都必须先在浏览器登录一次选课系统，并保持登录状态。**
-> 登录态有时效（几小时到一天），如果自检或抢课时提示「Cookie 已失效」，不用手动折腾——
-> 直接跑一次 `python src/grab.py --login`，脚本会打开浏览器带你重新登录并自动验证。
+脚本自己管理登录态：自动读取浏览器 Cookie 并固化到本地 `cookie.txt`（文件优先），
+失效时引导现场重登。**正常使用不需要先手动登录**，只在首次使用或登录态过期时
+才需要走一次第 0 步。
 
-### 第 0 步：登录选课系统（必做，先于一切）
+### 第 0 步：登录选课系统（首次使用 / Cookie 失效时）
 
-用 **Edge 或 Chrome** 打开下面的选课页入口（注意是 `http`，站点根路径只显示欢迎页）：
+跑 `python src/grab.py --login`（或双击选课助手选 **1 自检**，发现 Cookie 失效时按提示
+选 Y 现场登录），脚本会自动用 **Edge 或 Chrome** 打开选课页：
 
 ```
 http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
 ```
 
 未登录时会自动跳到复旦统一身份认证（UIS），登录成功后自动回到选课页面。
-**登录后别关闭浏览器、别退出登录**，脚本会自动从浏览器里读取 Cookie。
+在浏览器里完成登录后回到终端**回车确认**，脚本会自动等待 Cookie 落盘并验证保存
+（写入有延迟，回车后自动重读——进度条倒计时，最多 1 分钟、约 20 次机会，**不用自己掐时间**）。
 
-> 不想手动先登录也行：直接跑 `python src/grab.py --login`（或双击选课助手选 1 自检，按提示操作），
-> 脚本会自动打开浏览器，你在弹出的窗口里登录、回车确认即可，Cookie 会被验证并保存。
-> 登录态的写入有延迟，回车后脚本会自动等待重读（进度条倒计时，最多 1 分钟、约 20 次机会），**不用自己掐时间**。
+> 登录态有时效（几小时到一天）。之后自检或抢课时若提示「Cookie 已失效」，跑一次
+> `--login`（或按提示选 Y 现场登录）即可，不用手动折腾。
 
 ### 一键双击（推荐）
 
-登录后，双击对应平台的入口脚本，会弹出菜单，输入编号回车即可随时切换三个功能：
+双击对应平台的入口脚本，会弹出菜单，输入编号回车即可随时切换三个功能：
 
 | 平台 | 双击入口 |
 |---|---|
@@ -78,12 +79,10 @@ http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 在浏览器登录一次选课系统（Edge 或 Chrome），保持登录
-
-# 3. 自检（不会提交任何选课请求）
+# 2. 自检（不会提交任何选课请求；无登录态或已失效会引导现场登录）
 python src/grab.py --dry-run
 
-# 4. 抢课（会等到 config.json 里的 start_time 再开始）
+# 3. 抢课（会等到 config.json 里的 start_time 再开始）
 python src/grab.py
 ```
 
@@ -101,7 +100,7 @@ python src/grab.py --probe     # 链路演练：发 1 次真实请求看服务�
 
 不想手动一条条填 `courses` / 抓 `bjdm`？可以先把课选好、自动生成 `config.json`：
 
-登录选课系统（第 0 步）后，双击 `scripts/选课助手.command / .bat` 并在菜单里选
+双击 `scripts/选课助手.command / .bat` 并在菜单里选
 **2 预选课**（或命令行运行 `python3 src/preselect.py`），脚本会：
 
 1. 自动读取并验证登录态（失效时会引导现场登录）
