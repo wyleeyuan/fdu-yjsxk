@@ -100,8 +100,46 @@ def already_have(msg: str) -> bool:
     return any(kw in msg for kw in ("已选", "已选择", "已经选", "重复"))
 
 
-def handle_result(course: dict, code, msg: str, done: list, pending: list) -> None:
-    """处理一门课的选课结果：成了就从待抢列表里去掉。"""
+FULL_KWS = ("已满", "满员", "满额", "已选满")
+"""判定「课程满员」的关键词（用组合词避免把"不满"之类的文案误判成满课）。"""
+
+
+def is_full_msg(msg) -> bool:
+    return bool(msg) and any(k in msg for k in FULL_KWS)
+
+
+def order_pending(pending: list) -> list:
+    """满课降级：每轮把非满课按原优先级排前面，上一轮判定满员的课统一挪到
+    本轮末尾再试——让能抢的课永远最先被处理，满课也不放弃（可能有人退课/
+    放号），只是不挡在前面。"""
+    fresh = [c for c in pending if not c.get("_full")]
+    full = [c for c in pending if c.get("_full")]
+    return fresh + full
+
+
+def _note_failure(course: dict, msg: str, dropped: list, full_max: int) -> bool:
+    """记录一次选课失败。判定为满课时：标记 _full（下轮自动降级到末尾）并累加
+    连续满次数；超过 full_max 次就把该课移出待抢并记入 dropped（返回 True，
+    调用方负责 pending.remove）。非满课失败则清掉满标记、恢复前排优先级。"""
+    name = course["name"]
+    if is_full_msg(msg):
+        course["_full"] = True
+        course["_full_streak"] = course.get("_full_streak", 0) + 1
+        streak = course["_full_streak"]
+        if full_max > 0 and streak >= full_max:
+            log(f"  ⏹ {name} 连续满员 {streak} 次，按配置放弃（full_max_tries={full_max}，设 0 则不放弃）")
+            dropped.append(name)
+            return True
+        log(f"  ~ {name} 满员，挪到本轮末尾再试（连满 {streak}/{full_max or '∞'} 次）")
+        return False
+    course["_full"] = False
+    course["_full_streak"] = 0
+    return False
+
+
+def settle_result(course: dict, code, msg: str, done: list, pending: list,
+                  dropped: list, full_max: int) -> None:
+    """处理一门课的轮询终局：选上 / 已拥有 → 移除；否则按满课策略记录/放弃。"""
     name, bjdm = course["name"], course["bjdm"]
     if code == 1:
         log(f"  ★ 选上 {name}（{bjdm}）")
@@ -114,41 +152,56 @@ def handle_result(course: dict, code, msg: str, done: list, pending: list) -> No
         pending.remove(course)
         return
     log(f"  × {name} 未成功：{msg or '未知原因'}")
+    if _note_failure(course, msg, dropped, full_max):
+        pending.remove(course)
 
 
-def run_serial(gr, pending: list, done: list, interval: float) -> None:
-    """串行：一门提交了、等结果出来，再搞下一门（系统的轮询逻辑是单例，不能并发）。"""
-    for c in list(pending):
+def run_serial(gr, pending: list, done: list, dropped: list, interval: float) -> None:
+    """串行：一门提交了、等结果出来，再搞下一门（系统的轮询逻辑是单例，不能并发）。
+    每轮按「非满在前、满课在后」的顺序跑；满课连续满 full_max_tries 次自动放弃换门。"""
+    full_max = int(gr.cfg.get("full_max_tries", 3) or 0)
+    for c in order_pending(list(pending)):
         ok, info = gr.submit(c)
         if not ok:
-            log(f"  × {c['name']}：{info}")
             if already_have(info or ""):
                 log(f"  ✓ {c['name']} 判定为已拥有，跳过")
                 done.append(c["name"])
                 pending.remove(c)
+            else:
+                log(f"  × {c['name']}：{info}")
+                if _note_failure(c, info, dropped, full_max):
+                    pending.remove(c)
             time.sleep(interval)
             continue
         log(f"  已提交 {c['name']}（{c['bjdm']}），等待结果 ...")
         code, msg = gr.poll_result(info)
-        handle_result(c, code, msg, done, pending)
+        settle_result(c, code, msg, done, pending, dropped, full_max)
         time.sleep(interval)
 
 
-def run_parallel(gr, pending: list, done: list, interval: float) -> None:
-    """并发：一轮里先把所有课都提交出去，再统一收结果（快，但结果可能串）。"""
+def run_parallel(gr, pending: list, done: list, dropped: list, interval: float) -> None:
+    """并发：一轮里先把所有课都提交出去，再统一收结果（快，但结果可能串）。
+    提交顺序同样按「非满在前、满课在后」；满课连满超阈值自动放弃。"""
+    full_max = int(gr.cfg.get("full_max_tries", 3) or 0)
     submitted = {}
-    for c in pending:
+    for c in order_pending(list(pending)):
         ok, info = gr.submit(c)
         if ok:
             submitted[c["bjdm"]] = (c, info)
             log(f"  已提交 {c['name']}（{c['bjdm']}）")
         else:
             log(f"  × {c['name']}：{info}")
+            if already_have(info or ""):
+                log(f"  ✓ {c['name']} 判定为已拥有，跳过")
+                done.append(c["name"])
+                pending.remove(c)
+            elif _note_failure(c, info, dropped, full_max):
+                pending.remove(c)
         time.sleep(interval)
 
     for _bjdm, (c, xid) in submitted.items():
         code, msg = gr.poll_result(xid)
-        handle_result(c, code, msg, done, pending)
+        settle_result(c, code, msg, done, pending, dropped, full_max)
 
 
 # ---------------------------------------------------------------- cookie ----
@@ -496,6 +549,7 @@ def run(cfg: dict, start_now: bool) -> int:
     log("开始抢课！" + ("（串行模式：一门结果出来再选下一门）" if serial else "（并发模式：一轮全提交）"))
     last_cookie_ts = time.time()
     done: list = []
+    dropped: list = []
     round_no = 0
 
     while pending and dt.datetime.now() < end_time:
@@ -525,9 +579,9 @@ def run(cfg: dict, start_now: bool) -> int:
                 continue
 
         if serial:
-            run_serial(gr, pending, done, interval)
+            run_serial(gr, pending, done, dropped, interval)
         else:
-            run_parallel(gr, pending, done, interval)
+            run_parallel(gr, pending, done, dropped, interval)
 
         if pending:
             time.sleep(interval)
@@ -536,6 +590,10 @@ def run(cfg: dict, start_now: bool) -> int:
     if done:
         log(f"成功 {len(done)} 门：")
         for name in done:
+            log(f"  · {name}")
+    if dropped:
+        log(f"放弃 {len(dropped)} 门（连续满员超过 full_max_tries）：")
+        for name in dropped:
             log(f"  · {name}")
     if pending:
         log(f"未拿下 {len(pending)} 门：")
