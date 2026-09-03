@@ -253,16 +253,44 @@ def ask_time(label: str, default: str) -> str:
             log("  ✗ 格式应为 YYYY-MM-DD HH:MM:SS，例如 2026-09-04 12:59:55")
 
 
-def default_window() -> tuple[str, str]:
-    """默认开抢窗口：日期自动取今天，时刻固定 12:59:55 起跑 / 13:30 收工。
+# 每天放退课名额的时间点：10:00 与 13:00 两场。
+# 默认起跑时刻 = 放号时间提前 5 秒；收工 = 放号后 30 分钟。
+SLOT_HOURS = (10, 13)   # 放号整点
+SLOT_LEAD = 5           # 起跑提前秒数
+SLOT_RUN_MIN = 30       # 放号后收工分钟数
 
-    13:00 是每天放退课名额的时间点，日期由系统自动填成当天，
-    用户无需手动改日期，只留具体时刻不变。
+
+def slot_window(release: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
+    """放号时刻 → (起跑时刻, 收工时刻)。"""
+    start = release - dt.timedelta(seconds=SLOT_LEAD)
+    end = release + dt.timedelta(minutes=SLOT_RUN_MIN)
+    return start, end
+
+
+def next_slot(now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime]:
+    """找「最近一场还没开始放号」的开抢窗口。
+
+    依次看 今天 10:00 → 今天 13:00 → 明天 10:00 → 明天 13:00，返回
+    第一个放号时刻晚于 now 的场次；已经开始/已经过去的场次不回头。
     """
-    now = dt.datetime.now()
-    d = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start = d + dt.timedelta(hours=12, minutes=59, seconds=55)
-    end = start.replace(hour=13, minute=30, second=0)
+    now = now or dt.datetime.now()
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    for day_offset in range(2):
+        day = base + dt.timedelta(days=day_offset)
+        for hh in SLOT_HOURS:
+            release = day.replace(hour=hh, minute=0, second=0)
+            if release > now:
+                return slot_window(release)
+    raise AssertionError("两天内必有一场未开始的放号")  # 逻辑上不可达
+
+
+def default_window(now: dt.datetime | None = None) -> tuple[str, str]:
+    """默认开抢窗口：取最近一场还没开始的放号（每天 10:00 / 13:00 两场）。
+
+    当天两场都过了就自动顺延到明天第一场（10:00），保证生成的窗口永远
+    落在未来，不会给出一份已经过期的 config。
+    """
+    start, end = next_slot(now)
     return start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -562,11 +590,24 @@ def main() -> int:
     # ---- 5. 开抢时间 ----
     old_start, old_end = old.get("start_time"), old.get("end_time")
     if old_start and old_end:
-        def_start, def_end = old_start, old_end
-        log("沿用现有 config.json 的开抢窗口，直接回车即可；也可输入新时间覆盖")
+        try:
+            old_end_dt = dt.datetime.strptime(old_end, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            old_end_dt = None
+        if old_end_dt is not None and old_end_dt <= dt.datetime.now():
+            def_start, def_end = default_window()
+            log(
+                f"原 config 的开抢窗口已过（{old_start} ~ {old_end}），"
+                f"默认顺延到最近一场放号：{def_start} 起跑 / {def_end} 收工"
+            )
+            log("直接回车即可；也可输入新时间覆盖")
+        else:
+            def_start, def_end = old_start, old_end
+            log("沿用现有 config.json 的开抢窗口，直接回车即可；也可输入新时间覆盖")
     else:
         def_start, def_end = default_window()
-        log(f"默认开抢窗口日期取今天，时刻 12:59:55 起跑 / 13:30 收工（13:00 放退课名额），直接回车即可")
+        log("默认取最近一场放号（每天 10:00 / 13:00 两场，提前 5 秒起跑、放号后 30 分钟收工）")
+        log(f"当天两场已过则自动顺延到明天第一场。当前默认：{def_start} 起跑 / {def_end} 收工，直接回车即可")
     start_time = ask_time("开抢时间 start_time", def_start)
     end_time = ask_time("收工时间 end_time", def_end)
     if dt.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") <= dt.datetime.strptime(
