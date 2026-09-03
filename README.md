@@ -45,6 +45,7 @@ http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
 
 > 不想手动先登录也行：直接跑 `python grab.py --login`（或双击自检后按提示操作），
 > 脚本会自动打开浏览器，你在弹出的窗口里登录、回车确认即可，Cookie 会被验证并保存。
+> 登录态的写入有延迟，回车后脚本会自动等待重读（进度条倒计时，最多 1 分钟、约 20 次机会），**不用自己掐时间**。
 
 ### 一键双击（推荐）
 
@@ -79,7 +80,7 @@ python grab.py
 ```bash
 python grab.py             # 正常跑，等到 start_time 开始
 python grab.py --dry-run   # 环境自检，不发请求（Cookie 失效时会引导现场登录）
-python grab.py --login     # 现场登录：自动打开浏览器 → 你登录后回车 → 验证并保存 Cookie
+python grab.py --login     # 现场登录：自动打开浏览器 → 你登录后回车 → 自动等待 Cookie 落盘并验证保存
 python grab.py --now       # 忽略 start_time，立即开始
 python grab.py --probe     # 链路演练：发 1 次真实请求看服务器回什么
 ```

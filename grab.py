@@ -41,6 +41,12 @@ DOMAIN = "yjsxk.fudan.edu.cn"
 # 站点根路径只返回 OpenResty 欢迎页；选课应用入口在这条路径上。
 # 未登录访问会 302 到复旦统一认证（id.fudan.edu.cn），登录后自动跳回。
 APP_ENTRY = "/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do"
+
+# --login 登录后，UIS 跳转 + Cookie 落盘可能有延迟，重试窗口放宽。
+# 每 LOGIN_INTERVAL 秒自动重读一次浏览器 Cookie，最长等 LOGIN_WAIT 秒
+# （60s / 3s ≈ 20 次重读机会），期间显示倒计时进度条。
+LOGIN_WAIT = 60
+LOGIN_INTERVAL = 3
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -56,6 +62,30 @@ def ts() -> str:
 
 def log(msg: str = "") -> None:
     print(f"[{ts()}] {msg}", flush=True)
+
+
+def _countdown(seconds: float, note: str) -> None:
+    """终端倒计时进度条：原地刷新剩余秒数+进度条，直到超时。
+
+    非交互（输出非 tty）时直接睡满，不刷屏。
+    """
+    if not sys.stdout.isatty():
+        time.sleep(seconds)
+        return
+    end = time.monotonic() + seconds
+    bar_w = 15
+    while True:
+        left = end - time.monotonic()
+        if left <= 0:
+            break
+        secs = int(left) + 1  # 向上取整，避免闪 0
+        filled = round((1 - left / seconds) * bar_w)
+        bar = "█" * filled + "░" * (bar_w - filled)
+        sys.stdout.write(f"\r  ⏳ {note}  {secs:>2}s {bar}")
+        sys.stdout.flush()
+        time.sleep(min(0.2, left))
+    sys.stdout.write("\r" + " " * 80 + "\r")
+    sys.stdout.flush()
 
 
 class CookieError(RuntimeError):
@@ -541,20 +571,41 @@ def cmd_login(cfg: dict) -> str:
     print(f"    登录成功、能看到选课页面后，回到这里按【回车】")
     try:
         input("  >>> ")
+        waited = True  # 人在场：字段未落盘时可以自动等待重读
     except EOFError:
         print()
         log("（非交互环境，跳过等待，直接尝试读取 Cookie）")
+        waited = False
 
     # 现场登录后强制从浏览器读（用户刚登录，浏览器里就是最新 Cookie），
     # 不走 cookie_source=auto 的文件优先，避免拿到旧 cookie.txt。
     login_cfg = dict(cfg)
     login_cfg["cookie_source"] = "browser"
-    cookie = obtain_cookie(login_cfg)
 
-    names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
-    missing = {"JSESSIONID", "_WEU"} - set(names)
-    if missing:
-        raise CookieError(f"登录后仍缺少关键字段：{', '.join(missing)}")
+    # UIS 登录跳转完成后，_WEU 等关键字段可能延迟落盘到浏览器 Cookie 库
+    # （实测有时要数十秒）。人在场时自动重读：最多等 LOGIN_WAIT 秒、每
+    # LOGIN_INTERVAL 秒读一次并显示倒计时；非交互环境只读一次直接报错。
+    deadline = time.monotonic() + LOGIN_WAIT if waited else None
+    reads = 0
+    while True:
+        reads += 1
+        cookie = obtain_cookie(login_cfg)
+        names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
+        missing = {"JSESSIONID", "_WEU"} - set(names)
+        if not missing:
+            break
+        if deadline is None or time.monotonic() >= deadline:
+            hint = (
+                f"等待 {LOGIN_WAIT} 秒仍未补全。请确认已在弹出的浏览器里完成登录"
+                f"（能看到选课页面），然后重跑一次 --login"
+                if waited
+                else "请先运行 python grab.py --login 现场登录（当前为非交互环境）"
+            )
+            raise CookieError(f"未读到完整登录态（缺 {', '.join(missing)}）。{hint}")
+        _countdown(
+            min(LOGIN_INTERVAL, deadline - time.monotonic()),
+            f"关键字段尚未落盘（缺 {', '.join(missing)}），自动重试第 {reads} 次",
+        )
 
     gr = Grabber(cfg, cookie)
     gr.refresh_token()  # 抛 CookieError 说明 Cookie 仍无效
