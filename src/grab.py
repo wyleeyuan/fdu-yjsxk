@@ -14,11 +14,11 @@
      原脚本 code!=0 就打印"提交选课成功"并退出，会漏课。
 
 用法：
-    python grab.py            正常跑（会等到 start_time 再开始）
-    python grab.py --dry-run  只做环境自检，不提交任何选课请求
-    python grab.py --login    打开浏览器现场登录，验证并保存 Cookie（登录态过期时用）
-    python grab.py --probe    链路演练：发 1 次真实请求，看服务器回什么
-    python grab.py --now      忽略 start_time，立刻开始
+    python src/grab.py            正常跑（会等到 start_time 再开始）
+    python src/grab.py --dry-run  只做环境自检，不提交任何选课请求
+    python src/grab.py --login    打开浏览器现场登录，验证并保存 Cookie（登录态过期时用）
+    python src/grab.py --probe    链路演练：发 1 次真实请求，看服务器回什么
+    python src/grab.py --now      忽略 start_time，立刻开始
 """
 
 from __future__ import annotations
@@ -33,7 +33,22 @@ import time
 
 import requests
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _repo_root() -> str:
+    """仓库根目录（config.json / cookie.txt / requirements.txt 所在处）。
+
+    标准布局下 grab.py 在仓库根的 src/ 里，根 = 上级目录；
+    旧布局 / 临时拷贝（py 与 config 同目录）则直接用本文件所在目录。
+    以“父目录里有没有 README.md”区分两种布局。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    parent = os.path.dirname(here)
+    if os.path.isfile(os.path.join(parent, "README.md")):
+        return parent
+    return here
+
+
+BASE_DIR = _repo_root()
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 COOKIE_PATH = os.path.join(BASE_DIR, "cookie.txt")
 
@@ -510,14 +525,14 @@ def run(cfg: dict, start_now: bool) -> int:
         cookie = _obtain_verified(cfg)
     except CookieError as exc:
         log(f"✗ 取 Cookie 失败：{exc}")
-        log("提示：可运行 python grab.py --login 现场登录一次，或双击「先跑自检.command」")
+        log("提示：可运行 python src/grab.py --login 现场登录一次，或双击「scripts/选课助手」选 1 自检")
         return 1
     gr = Grabber(cfg, cookie)
     try:
         gr.refresh_token()
     except CookieError as exc:
         log(f"✗ Cookie 已失效：{exc}")
-        log("提示：登录态已过期。先运行 python grab.py --login 重新登录，再回来抢课")
+        log("提示：登录态已过期。先运行 python src/grab.py --login 重新登录，再回来抢课")
         return 1
     log(f"Cookie 有效，csrfToken = {gr.token[:8]}...")
 
@@ -657,7 +672,7 @@ def cmd_login(cfg: dict) -> str:
                 f"等待 {LOGIN_WAIT} 秒仍未补全。请确认已在弹出的浏览器里完成登录"
                 f"（能看到选课页面），然后重跑一次 --login"
                 if waited
-                else "请先运行 python grab.py --login 现场登录（当前为非交互环境）"
+                else "请先运行 python src/grab.py --login 现场登录（当前为非交互环境）"
             )
             raise CookieError(f"未读到完整登录态（缺 {', '.join(missing)}）。{hint}")
         _countdown(
@@ -676,7 +691,7 @@ def cmd_login(cfg: dict) -> str:
 def _ask_relogin(cfg: dict) -> bool:
     """Cookie 失效时问用户要不要现场登录。非交互环境直接跳过。"""
     if not sys.stdin.isatty():
-        log("  非交互环境，跳过重新登录（可手动运行 python grab.py --login）")
+        log("  非交互环境，跳过重新登录（可手动运行 python src/grab.py --login）")
         return False
     try:
         ans = input("  要现在打开浏览器重新登录选课系统吗？[Y/n] ").strip().lower()
@@ -747,7 +762,7 @@ def dry_run(cfg: dict) -> int:
 
     log("")
     log("=== 自检通过 ===")
-    log("可以开抢了：双击「一键抢课.command」，或直接运行 python grab.py")
+    log("可以开抢了：双击「scripts/选课助手」选 3 开始抢课，或直接运行 python src/grab.py")
     return 0
 
 

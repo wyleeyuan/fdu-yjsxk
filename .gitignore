@@ -18,3 +18,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+# 预选课备份的旧 config（含真实课程，不入库）
+config.json.preselect.bak
