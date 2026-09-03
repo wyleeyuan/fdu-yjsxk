@@ -9,7 +9,8 @@
     "target": "选课系统域名，一般不用改",
     "start_time": "开抢时间，格式 YYYY-MM-DD HH:MM:SS，建议比开放时间提前 3~5 秒起跑",
     "end_time": "到点强制收工，格式同上",
-    "browser": "从哪个浏览器读登录 Cookie，edge 或 chrome",
+    "browser": "优先从哪个浏览器读登录 Cookie，edge 或 chrome。读不到会自动改试另一个，登录在哪个浏览器都能用，写错也不要紧",
+    "cookie_source": "Cookie 来源。auto=先读 cookie.txt（自检/--login 时保存的已验证 Cookie），没有再读浏览器；browser=只读浏览器；file=只读 cookie.txt。一般保持 auto 即可",
     "serial_mode": "务必 true。选课系统的结果轮询是单例的，并发提交会丢结果，必须一门一门来",
     "courses": "要抢的课程列表，顺序即优先级，把容量最小、最难抢的排最前面"
   },

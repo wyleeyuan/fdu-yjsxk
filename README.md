@@ -29,12 +29,22 @@ pip install -r requirements.txt
 ## 快速开始
 
 > ⚠️ **重要：无论用哪种方式，跑「自检」之前，都必须先在浏览器登录一次选课系统，并保持登录状态。**
-> 脚本是自动从浏览器里读你的登录 Cookie 来访问选课系统的，没登录的话自检会直接报「Cookie 无效」。
+> 登录态有时效（几小时到一天），如果自检或抢课时提示「Cookie 已失效」，不用手动折腾——
+> 直接跑一次 `python grab.py --login`，脚本会打开浏览器带你重新登录并自动验证。
 
 ### 第 0 步：登录选课系统（必做，先于一切）
 
-用 **Edge 或 Chrome** 打开 `https://yjsxk.fudan.edu.cn`，用你的统一身份认证（UIS）账号登录，
-进入选课页面。**登录后别关闭浏览器、别退出登录**，脚本会自动从浏览器里读取 Cookie。
+用 **Edge 或 Chrome** 打开下面的选课页入口（注意是 `http`，站点根路径只显示欢迎页）：
+
+```
+http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
+```
+
+未登录时会自动跳到复旦统一身份认证（UIS），登录成功后自动回到选课页面。
+**登录后别关闭浏览器、别退出登录**，脚本会自动从浏览器里读取 Cookie。
+
+> 不想手动先登录也行：直接跑 `python grab.py --login`（或双击自检后按提示操作），
+> 脚本会自动打开浏览器，你在弹出的窗口里登录、回车确认即可，Cookie 会被验证并保存。
 
 ### 一键双击（推荐）
 
@@ -47,6 +57,7 @@ pip install -r requirements.txt
 
 > macOS 首次双击 `.command` 若被系统拦截，右键 →「打开」即可。
 > Windows 的 `.bat` 会先自动检测并安装依赖，再运行。
+> 双击自检时若发现 Cookie 已失效，会问你是否打开浏览器重新登录，选 Y 即可。
 
 ### 命令行
 
@@ -67,7 +78,8 @@ python grab.py
 
 ```bash
 python grab.py             # 正常跑，等到 start_time 开始
-python grab.py --dry-run   # 环境自检，不发请求
+python grab.py --dry-run   # 环境自检，不发请求（Cookie 失效时会引导现场登录）
+python grab.py --login     # 现场登录：自动打开浏览器 → 你登录后回车 → 验证并保存 Cookie
 python grab.py --now       # 忽略 start_time，立即开始
 python grab.py --probe     # 链路演练：发 1 次真实请求看服务器回什么
 ```
@@ -81,13 +93,15 @@ python grab.py --probe     # 链路演练：发 1 次真实请求看服务器回
   "target": "yjsxk.fudan.edu.cn",        // 选课系统域名
   "start_time": "2026-09-02 09:59:55",   // 开抢时间（提前几秒起跑）
   "end_time": "2026-09-02 10:30:00",     // 到点强制收工
-  "browser": "edge",                     // 从哪个浏览器读 Cookie
+  "browser": "edge",                     // 优先读哪个浏览器（edge/chrome），读不到会自动试另一个
   "serial_mode": true,                   // 一门一门来，务必保持 true
   "courses": [
     // name / bjdm / lx / bqmc / enabled
   ]
 }
 ```
+
+- `browser` 只是**优先顺序**，不是硬性指定：脚本会先试 config 里写的浏览器，读不到登录 Cookie 就自动补试另一个。登录在 Edge 就写 `edge`，登录在 Chrome 就写 `chrome`，或者干脆不写（默认 edge 优先）——只要登录态在 Edge 或 Chrome 任一浏览器里，都能取到。
 
 - `bjdm`（班级代码）格式为 `学年学期 + 课程代码 + .班号`，需要到选课系统抓取，不同年级前缀不同。
 - `lx` / `bqmc` 是选课系统的分类编码，已在脚本内说明对应关系。
@@ -124,7 +138,7 @@ python grab.py --probe     # 链路演练：发 1 次真实请求看服务器回
 **操作步骤：**
 
 1. 先确认浏览器扩展已连接、AI 能控制浏览器（例如在 WorkBuddy 里装好 bsk 扩展，状态为绿色已连接）。
-2. 确保浏览器已经登录选课系统，并且**能正常打开选课页面**（校外需先挂校园网/VPN，见下方警告）。
+2. 确保浏览器已经登录选课系统，并且**能正常打开选课页面**。
 3. 直接对 AI 说一句，例如：
 
    > “帮我打开选课系统，读取我要抢的那几门课的班级代码，写进 config.json。”
@@ -134,9 +148,8 @@ python grab.py --probe     # 链路演练：发 1 次真实请求看服务器回
 **为什么推荐这么干**：`bjdm` 是选课接口真正要传的班级代码，手抄容易错（尤其是班号 `.01`/`.02`/`.03`），
 AI 直接读原始数据能保证一字不差，还能顺带核对课程容量、把难抢的课排在前面。
 
-> ⚠️ **前置条件**：选课系统 `yjsxk.fudan.edu.cn` 是校内系统，校外直连会连不上（`28.0.0.39` 是校内网段）。
-> 无论手动抓还是让 AI 抓，都**必须先能访问选课系统**——在校外需要先连校园网或学校 VPN。
-> 否则浏览器会报 `ERR_CONNECTION_CLOSED`，AI 也读不到任何内容。
+> ⚠️ **前置条件**：登录选课系统需要复旦统一身份认证（UIS）账号，且登录态有时效。
+> 浏览器能打开选课页面、能正常浏览课程列表即可，无需校园网或 VPN。
 
 ## 为什么是一门一门选
 

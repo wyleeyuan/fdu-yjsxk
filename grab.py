@@ -16,6 +16,7 @@
 用法：
     python grab.py            正常跑（会等到 start_time 再开始）
     python grab.py --dry-run  只做环境自检，不提交任何选课请求
+    python grab.py --login    打开浏览器现场登录，验证并保存 Cookie（登录态过期时用）
     python grab.py --probe    链路演练：发 1 次真实请求，看服务器回什么
     python grab.py --now      忽略 start_time，立刻开始
 """
@@ -37,6 +38,9 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 COOKIE_PATH = os.path.join(BASE_DIR, "cookie.txt")
 
 DOMAIN = "yjsxk.fudan.edu.cn"
+# 站点根路径只返回 OpenResty 欢迎页；选课应用入口在这条路径上。
+# 未登录访问会 302 到复旦统一认证（id.fudan.edu.cn），登录后自动跳回。
+APP_ENTRY = "/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -133,7 +137,7 @@ def cookie_from_browser(browser: str = "edge"):
     try:
         jar = getattr(browser_cookie3, getter)()
     except Exception as exc:  # 权限、钥匙串、数据库锁等
-        return None, f"读取浏览器 Cookie 失败：{exc}"
+        return None, f"读取 {browser} Cookie 失败：{exc}"
 
     picked = []
     for c in jar:
@@ -144,7 +148,7 @@ def cookie_from_browser(browser: str = "edge"):
             picked.append(f"{c.name.strip()}={c.value.strip()}")
 
     if not picked:
-        return None, "浏览器里没有该站点的 Cookie（请先在 Edge 登录一次选课系统）"
+        return None, f"{browser} 里没有该站点的登录 Cookie（请先在 {browser} 登录一次选课系统）"
     return "; ".join(picked), None
 
 
@@ -162,25 +166,66 @@ def cookie_from_file():
     return raw, None
 
 
+def _browser_chain(browser) -> list[str]:
+    """把 config 的 browser 字段规范成探测顺序列表（去重）。
+
+    兼容两种写法：
+      "edge"            → ["edge", "chrome"]  先试 edge，失败自动补 chrome
+      ["edge","chrome"] → ["edge", "chrome"]  按数组顺序逐个试
+    无论怎么写，edge/chrome 都会出现在链里（没写到的那个排最后兜底），
+    保证登录在哪个浏览器都能取到 Cookie。
+    """
+    if isinstance(browser, str):
+        chain = [browser]
+    elif isinstance(browser, (list, tuple)):
+        chain = list(browser)
+    else:
+        chain = []
+    # 只保留支持的浏览器，重复的去掉
+    chain = [b for b in chain if b in ("edge", "chrome")]
+    for b in ("edge", "chrome"):
+        if b not in chain:
+            chain.append(b)
+    return chain
+
+
 def obtain_cookie(cfg: dict) -> str:
-    """按 cookie_source 取 Cookie：auto / browser / file。"""
+    """按 cookie_source 取 Cookie：auto / browser / file。
+
+    - auto（默认）：先读 cookie.txt（自检/--login 时写入的已验证 Cookie），
+      没有再读浏览器——避免浏览器库里残留的过期 Cookie 盖掉新备份。
+    - browser：只读浏览器。browser 字段支持字符串或数组，按顺序探测
+      （edge 读不到就试 chrome），登录在哪个浏览器就用哪个。
+    """
     source = cfg.get("cookie_source", "auto")
     browser = cfg.get("browser", "edge")
+    first = browser[0] if isinstance(browser, (list, tuple)) and browser else browser
 
-    if source in ("auto", "browser"):
-        value, err = cookie_from_browser(browser)
+    if source == "auto":
+        # 文件优先：这是最近一次验证通过后固化的 Cookie
+        value, err = cookie_from_file()
         if value:
             return value
-        log(f"  浏览器取 Cookie 未成功：{err}")
+
+    if source in ("auto", "browser"):
+        for name in _browser_chain(browser):
+            value, cerr = cookie_from_browser(name)
+            if value:
+                if name != first:
+                    log(f"  {first} 里没有 Cookie，改用 {name}（config 的 browser 可改成 {name}）")
+                return value
+            log(f"  {name} 取 Cookie 未成功：{cerr}")
         if source == "browser":
-            raise CookieError(err)
+            raise CookieError("Edge 和 Chrome 都读不到该站点的 Cookie")
 
     value, err = cookie_from_file()
     if value:
         return value
     raise CookieError(
-        f"{err}。请先在 Edge/Chrome 登录 http://{DOMAIN} ，"
-        f"或把 Cookie 粘贴进 {os.path.basename(COOKIE_PATH)}"
+        f"{err}。请先在 Edge/Chrome 打开选课页\n"
+        f"    http://{DOMAIN}{APP_ENTRY}\n"
+        f"   （未登录会自动跳复旦统一认证，登录完回到选课页即可）\n"
+        f"    或把 Cookie 粘贴进 {os.path.basename(COOKIE_PATH)}"
     )
 
 
@@ -329,6 +374,41 @@ def countdown_banner(deadline: dt.datetime, n_courses: int) -> None:
     log("=" * 46)
 
 
+def _obtain_verified(cfg: dict) -> str:
+    """失效恢复专用：轮询 文件 → Edge → Chrome，取第一个能通过 csrfToken 验证的 Cookie。
+
+    与 obtain_cookie 的区别：obtain_cookie 只负责“拿到一份 Cookie”不验证，
+    若 cookie.txt 已过期会一直命中同一份失效文件、永不 fallback 浏览器；
+    本函数对每个来源都现场验证，文件不行就试浏览器。
+    """
+    if cfg.get("cookie_source") == "file":
+        chain = ["file"]
+    elif cfg.get("cookie_source") == "browser":
+        chain = _browser_chain(cfg.get("browser", "edge"))
+    else:  # auto
+        chain = ["file"] + _browser_chain(cfg.get("browser", "edge"))
+
+    last_err = ""
+    for name in chain:
+        if name == "file":
+            cookie, err = cookie_from_file()
+        else:
+            cookie, err = cookie_from_browser(name)
+        if not cookie:
+            last_err = f"{name}：{err}"
+            continue
+        g = Grabber(cfg, cookie)
+        try:
+            g.refresh_token()  # 验证通过才算数
+        except CookieError as exc:
+            last_err = f"{name}：{exc}"
+            continue
+        if name != "file":
+            _save_cookie(cookie)  # 浏览器取到就顺手固化，下次直接命中文件
+        return cookie
+    raise CookieError(f"所有来源均失效（{last_err}）")
+
+
 def run(cfg: dict, start_now: bool) -> int:
     interval = float(cfg.get("request_interval", 0.8))
     refresh_secs = float(cfg.get("cookie_refresh_secs", 240))
@@ -341,11 +421,21 @@ def run(cfg: dict, start_now: bool) -> int:
         log("没有启用任何课程，退出")
         return 0
 
-    # ---- 取 Cookie 并自检 ----
+    # ---- 取 Cookie 并自检（文件失效自动改试浏览器，全程现场验证）----
     log("正在获取 Cookie ...")
-    cookie = obtain_cookie(cfg)
+    try:
+        cookie = _obtain_verified(cfg)
+    except CookieError as exc:
+        log(f"✗ 取 Cookie 失败：{exc}")
+        log("提示：可运行 python grab.py --login 现场登录一次，或双击「先跑自检.command」")
+        return 1
     gr = Grabber(cfg, cookie)
-    gr.refresh_token()
+    try:
+        gr.refresh_token()
+    except CookieError as exc:
+        log(f"✗ Cookie 已失效：{exc}")
+        log("提示：登录态已过期。先运行 python grab.py --login 重新登录，再回来抢课")
+        return 1
     log(f"Cookie 有效，csrfToken = {gr.token[:8]}...")
 
     if start_now:
@@ -364,8 +454,9 @@ def run(cfg: dict, start_now: bool) -> int:
                 wait_until(prewarm, "等待换票点")
                 log("临近开抢，重新获取一次最新 Cookie ...")
                 try:
-                    gr.set_cookie(obtain_cookie(cfg))
-                    gr.refresh_token()
+                    new_cookie = _obtain_verified(cfg)  # 已现场验证，文件失效自动改试浏览器
+                    gr.set_cookie(new_cookie)
+                    gr.refresh_token()  # 同步 gr 里的 token
                     log(f"已换新票，csrfToken = {gr.token[:8]}...")
                 except CookieError as exc:
                     log(f"换新票失败（继续用旧票）：{exc}")
@@ -394,8 +485,8 @@ def run(cfg: dict, start_now: bool) -> int:
             log(f"回合 {round_no}：{exc}")
             log("尝试重新获取 Cookie ...")
             try:
-                gr.set_cookie(obtain_cookie(cfg))
-                gr.refresh_token()
+                new_cookie = _obtain_verified(cfg)  # 文件失效自动改试浏览器
+                gr.set_cookie(new_cookie)
                 last_cookie_ts = time.time()
                 log("已恢复")
             except CookieError as exc2:
@@ -424,10 +515,108 @@ def run(cfg: dict, start_now: bool) -> int:
     return 0 if not pending else 1
 
 
+def _save_cookie(cookie: str) -> None:
+    """把验证过的 Cookie 固化到 cookie.txt，抢课时读不到浏览器也能兜底。"""
+    with open(COOKIE_PATH, "w", encoding="utf-8") as fh:
+        fh.write(cookie)
+    log(f"✓ Cookie 已保存到 {os.path.basename(COOKIE_PATH)}（作为抢课时的后备）")
+
+
+def cmd_login(cfg: dict) -> str:
+    """现场登录：打开浏览器 → 用户登录 → 回车 → 验证 → 保存 cookie.txt。
+
+    返回验证通过的 Cookie 字符串；验证失败抛 CookieError。
+    """
+    url = f"http://{cfg.get('target', DOMAIN)}{APP_ENTRY}"
+    log(f"正在打开浏览器：{url}")
+    log("  （若未登录会自动跳到复旦统一认证，登录后回到选课页）")
+    try:
+        import webbrowser
+        webbrowser.open(url)  # 打开系统默认浏览器
+    except Exception as exc:
+        log(f"（自动打开浏览器失败：{exc}，请手动打开上面的网址）")
+
+    print()
+    print(f"  → 请在浏览器里登录选课系统（推荐 Edge 或 Chrome），")
+    print(f"    登录成功、能看到选课页面后，回到这里按【回车】")
+    try:
+        input("  >>> ")
+    except EOFError:
+        print()
+        log("（非交互环境，跳过等待，直接尝试读取 Cookie）")
+
+    # 现场登录后强制从浏览器读（用户刚登录，浏览器里就是最新 Cookie），
+    # 不走 cookie_source=auto 的文件优先，避免拿到旧 cookie.txt。
+    login_cfg = dict(cfg)
+    login_cfg["cookie_source"] = "browser"
+    cookie = obtain_cookie(login_cfg)
+
+    names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
+    missing = {"JSESSIONID", "_WEU"} - set(names)
+    if missing:
+        raise CookieError(f"登录后仍缺少关键字段：{', '.join(missing)}")
+
+    gr = Grabber(cfg, cookie)
+    gr.refresh_token()  # 抛 CookieError 说明 Cookie 仍无效
+    _save_cookie(cookie)
+    log("✓ 登录成功，Cookie 已验证有效")
+    log("  开抢前若再提示 Cookie 失效，重跑一次即可（几分钟的事）")
+    return cookie
+
+
+def _ask_relogin(cfg: dict) -> bool:
+    """Cookie 失效时问用户要不要现场登录。非交互环境直接跳过。"""
+    if not sys.stdin.isatty():
+        log("  非交互环境，跳过重新登录（可手动运行 python grab.py --login）")
+        return False
+    try:
+        ans = input("  要现在打开浏览器重新登录选课系统吗？[Y/n] ").strip().lower()
+    except EOFError:
+        return False
+    return ans != "n"
+
+
+def _selftest_cookie(cfg: dict) -> str | None:
+    """自检专用：取 Cookie → 校验关键字段 → 发请求验证有效。
+
+    失败且环境允许时，引导用户现场登录重试一次；仍失败返回 None。
+    成功后把 Cookie 固化到 cookie.txt（供抢课兜底）。
+    """
+    def try_once() -> tuple[str | None, str]:
+        try:
+            cookie = obtain_cookie(cfg)
+        except CookieError as exc:
+            return None, str(exc)
+        names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
+        missing = {"JSESSIONID", "_WEU"} - set(names)
+        if missing:
+            return None, f"缺少关键字段：{', '.join(missing)}（请先在浏览器登录选课系统）"
+        gr = Grabber(cfg, cookie)
+        try:
+            gr.refresh_token()
+        except CookieError as exc:
+            return None, str(exc)
+        return cookie, ""
+
+    cookie, err = try_once()
+    if cookie:
+        _save_cookie(cookie)
+        return cookie
+
+    log(f"✗ Cookie 未通过：{err}")
+    if not _ask_relogin(cfg):
+        return None
+    try:
+        return cmd_login(cfg)
+    except CookieError as exc:
+        log(f"✗ 现场登录仍失败：{exc}")
+        return None
+
+
 def dry_run(cfg: dict) -> int:
     log("=== 自检模式（不会提交任何选课请求）===")
     pending = [c for c in cfg["courses"] if c.get("enabled", True)]
-    log(f"目标站点：http://{cfg.get('target', DOMAIN)}")
+    log(f"目标站点：http://{cfg.get('target', DOMAIN)}{APP_ENTRY}")
     log(f"开抢时间：{cfg.get('start_time')}   结束：{cfg.get('end_time')}")
     log(f"启用课程：{len(pending)} / {len(cfg['courses'])} 门")
     for c in pending:
@@ -438,27 +627,14 @@ def dry_run(cfg: dict) -> int:
 
     log("")
     log("正在获取 Cookie ...")
-    try:
-        cookie = obtain_cookie(cfg)
-    except CookieError as exc:
-        log(f"✗ 取 Cookie 失败：{exc}")
+    cookie = _selftest_cookie(cfg)
+    if cookie is None:
+        log("")
+        log("✗ 自检未通过：Cookie 无效或无法取得，请先解决登录问题再开抢。")
         return 1
     names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
     log(f"✓ 取到 Cookie，共 {len(names)} 个字段：{', '.join(names)}")
-
-    must = {"JSESSIONID", "_WEU"}
-    missing = must - set(names)
-    if missing:
-        log(f"✗ 缺少关键字段：{', '.join(missing)} —— 请先在浏览器登录选课系统")
-        return 1
-
-    gr = Grabber(cfg, cookie)
-    try:
-        token = gr.refresh_token()
-    except CookieError as exc:
-        log(f"✗ {exc}")
-        return 1
-    log(f"✓ Cookie 有效，csrfToken = {token[:8]}...")
+    log("✓ Cookie 有效（csrfToken 校验通过）")
 
     log("")
     log("=== 自检通过 ===")
@@ -533,6 +709,7 @@ def probe(cfg: dict, force: bool) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="复旦大学研究生选课脚本")
     ap.add_argument("--dry-run", action="store_true", help="只自检，不提交选课请求")
+    ap.add_argument("--login", action="store_true", help="打开浏览器现场登录，验证并保存 Cookie 后退出")
     ap.add_argument("--now", action="store_true", help="忽略 start_time，立即开始")
     ap.add_argument("--probe", action="store_true", help="链路演练：发 1 次真实请求看服务器回什么")
     ap.add_argument("--force", action="store_true", help="配合 --probe，开放后也允许演练")
@@ -541,6 +718,13 @@ def main() -> int:
     cfg = load_config()
     if args.dry_run:
         return dry_run(cfg)
+    if args.login:
+        try:
+            cmd_login(cfg)
+            return 0
+        except CookieError as exc:
+            log(f"✗ 登录失败：{exc}")
+            return 1
     if args.probe:
         return probe(cfg, force=args.force)
     return run(cfg, start_now=args.now)
