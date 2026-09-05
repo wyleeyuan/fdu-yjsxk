@@ -15,22 +15,5 @@
   "serial_mode": true,
   "full_max_tries": 3,
 
-  "courses": [
-    {
-      "name": "示例课程A",
-      "kcdm": "CS50014",
-      "bjdm": "2026202701CS50014.01",
-      "lx": "8",
-      "bqmc": "6",
-      "enabled": true
-    },
-    {
-      "name": "示例课程B",
-      "kcdm": "GEIP40008",
-      "bjdm": "2026202701GEIP40008.03",
-      "lx": "7",
-      "bqmc": "1",
-      "enabled": false
-    }
-  ]
+  "courses": []
 }

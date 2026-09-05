@@ -147,6 +147,10 @@ python src/grab.py --probe     # 链路演练：发 1 次真实请求看服务�
 脚本每次写回前都会把旧文件备份为 `config.json.preselect.bak`（已 gitignore）。
 `bjdm`（班级代码）、`lx` / `bqmc`（分类编码）、开抢窗口都由脚本自动抓好写入。
 
+首次运行（直接跑 `grab.py` 或 `preselect.py`）若发现没有 `config.json`，会拿
+`config.example.json` 当模板自动创建一份**课程列表为空**的配置，并把开抢窗口设成
+最近一场放号（每天 10:00 / 13:00），无需手动 `cp`。之后用 `preselect.py` 预选课即可。
+
 少数情况才需要打开文件微调：
 
 - `enabled: false` —— 某门课这轮不抢（例如已经选上），预选课会原样保留这个开关

@@ -420,16 +420,76 @@ class Grabber:
 
 # ----------------------------------------------------------------- flow ----
 
+SLOT_HOURS = (10, 13)   # 每天放退课名额的整点
+SLOT_LEAD = 5           # 起跑提前秒数
+SLOT_RUN_MIN = 30       # 放号后收工分钟数
+
+
+def slot_window(release: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
+    """放号时刻 → (起跑时刻, 收工时刻)。"""
+    return (
+        release - dt.timedelta(seconds=SLOT_LEAD),
+        release + dt.timedelta(minutes=SLOT_RUN_MIN),
+    )
+
+
+def next_slot(now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime]:
+    """最近一场还没开始放号的开抢窗口。
+
+    依次看 今天 10:00 → 今天 13:00 → 明天 10:00 → 明天 13:00，返回第一个
+    放号时刻晚于 now 的场次；已经开始的场次不回头。
+    """
+    now = now or dt.datetime.now()
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    for day_offset in range(2):
+        day = base + dt.timedelta(days=day_offset)
+        for hh in SLOT_HOURS:
+            release = day.replace(hour=hh, minute=0, second=0)
+            if release > now:
+                return slot_window(release)
+    raise AssertionError("两天内必有一场未开始的放号")  # 逻辑上不可达
+
+
+def default_window(now: dt.datetime | None = None) -> tuple[str, str]:
+    """默认开抢窗口（字符串形式），取最近一场还没开始的放号。"""
+    start, end = next_slot(now)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return start.strftime(fmt), end.strftime(fmt)
+
+
+def _create_config() -> dict:
+    """首次运行：拿 config.example.json 当模板生成一份空配置。
+
+    课程列表留空（示例里的课程只是格式示范，不能直接拿去抢），开抢窗口
+    取最近一场放号，保证生成的时间永远在未来。
+    """
+    example = os.path.join(BASE_DIR, "config.example.json")
+    cfg: dict = {}
+    if os.path.exists(example):
+        try:
+            with open(example, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except Exception as exc:
+            log(f"⚠ {os.path.basename(example)} 解析失败（{exc}），改用内置默认设置")
+    cfg["target"] = cfg.get("target") or DOMAIN
+    cfg["courses"] = []
+    cfg["start_time"], cfg["end_time"] = default_window()
+    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2)
+    return cfg
+
+
 def load_config() -> dict:
+    """读 config.json；不存在时按模板自动创建一份（课程列表为空）。"""
     if not os.path.exists(CONFIG_PATH):
-        example = os.path.join(BASE_DIR, "config.example.json")
-        hint = (
-            f"找不到配置文件：{CONFIG_PATH}\n"
-            f"请参考 {os.path.basename(example)} 创建你自己的配置：\n"
-            f"  cp {os.path.basename(example)} config.json\n"
-            f"然后填入你的课程代码（bjdm 需从选课系统抓取）。"
-        )
-        raise SystemExit(hint)
+        try:
+            cfg = _create_config()
+        except OSError as exc:
+            raise SystemExit(f"无法创建配置文件 {CONFIG_PATH}：{exc}")
+        log(f"未找到 config.json，已自动创建一份空配置：{CONFIG_PATH}")
+        log(f"  开抢窗口默认取最近一场放号：{cfg['start_time']} ~ {cfg['end_time']}")
+        log("  课程列表是空的，请先运行：python src/preselect.py 预选课")
+        return cfg
     with open(CONFIG_PATH, encoding="utf-8") as fh:
         return json.load(fh)
 
@@ -506,7 +566,11 @@ def run(cfg: dict, start_now: bool) -> int:
 
     pending = [c for c in cfg["courses"] if c.get("enabled", True)]
     if not pending:
-        log("没有启用任何课程，退出")
+        if cfg["courses"]:
+            log("没有启用任何课程，退出")
+        else:
+            log("课程列表是空的，退出")
+            log("提示：先运行 python src/preselect.py 预选课，或直接编辑 config.json 填入课程")
         return 0
 
     # ---- 取 Cookie 并自检（文件失效自动改试浏览器，全程现场验证）----
