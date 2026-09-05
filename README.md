@@ -24,7 +24,8 @@ fdu-yjsxk/
 
 - **Python 3.9+**（推荐 3.10 ~ 3.13，3.13 实测可用）
 - 依赖包只有两个：`requests`、`browser-cookie3`，见 `requirements.txt`
-- **浏览器：macOS 上请用 Edge 或 Chrome，不要用 Safari**（原因见下）
+- **macOS：登录和抢课全程用 Edge 或 Chrome，不要用 Safari**（原因见下）
+- **Windows：读浏览器 Cookie 前先【完全退出】Chrome / Edge**（原因见下，不用管理员权限也行）
 
 ```bash
 pip install -r requirements.txt
@@ -37,6 +38,15 @@ pip install -r requirements.txt
 > `PermissionError: Operation not permitted`——除非单独给终端授予「完全磁盘访问权限」。
 > Edge / Chrome 的 Cookie 库（`~/Library/Application Support/.../Default/Cookies`）没有
 > 这层沙盒，脚本可以直接读。所以**登录和抢课全程用 Edge 或 Chrome 即可**。
+
+> **为什么 Windows 会报 "This operation requires admin" / 读不到**：Chrome / Edge 在运行时会
+> 把各自的 Cookie 库（`%LOCALAPPDATA%\Microsoft\Edge\User Data\...\Network\Cookies`、
+> `%LOCALAPPDATA%\Google\Chrome\User Data\...\Network\Cookies`）**锁住**，此时
+> `browser-cookie3` 读取会被系统要求管理员权限或直接读不到。**解决办法（任选其一，推荐第 1 种）**：
+> 1. 跑自检 / 抢课前先**完全退出 Chrome 和 Edge**——注意关窗口后可能还留在托盘或后台
+>    （任务管理器里确认 `msedge.exe` / `chrome.exe` 已结束）；
+> 2. 在本窗口右键「以管理员身份运行」（管理员终端能绕过锁定，但不是必需的）。
+> 与 macOS 同理：**在哪个浏览器登录，脚本就得从哪个浏览器读**，两边必须一致。
 
 ## 快速开始
 
@@ -82,7 +92,7 @@ http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
 
 > 建议顺序：先 1 自检 → 2 预选课 → 3 抢课。
 > macOS 首次双击 `.command` 若被系统拦截，右键 →「打开」即可。
-> Windows 的 `.bat` 会先自动检测并安装依赖，再显示菜单。
+> Windows 的 `.bat` 会自动定位 Python（依次试 `python` / `py -3`）并补装缺失依赖，再显示菜单。
 > 自检若发现 Cookie 已失效，会问你是否打开浏览器重新登录，选 Y 即可。
 
 ### 命令行

@@ -768,9 +768,11 @@ def cmd_login(cfg: dict) -> str:
         log(f"正在用系统默认浏览器打开：{url}")
         log("  （若未登录会自动跳到复旦统一认证，登录后回到选课页）")
         log("")
-        log("  ⚠️ 若弹出的不是 Edge / Chrome（例如 macOS 的 Safari），请把上面的网址")
-        log("    复制到 Edge 或 Chrome 里登录 —— 脚本读不到 Safari 的 Cookie。")
+        log("  ⚠️ 若弹出的不是 Edge / Chrome（macOS 的 Safari、Windows 上的其它默认浏览器等），")
+        log("    请把上面的网址复制到 Edge 或 Chrome 里登录 —— 脚本只读这两个浏览器的 Cookie。")
         log("    在哪个浏览器登录，脚本就得从哪个浏览器读，两边必须一致。")
+        log("    Windows 注意：若报 \"This operation requires admin\" 或读不到 Cookie，")
+        log("    先完全退出 Edge / Chrome（含后台进程）再重试，详见 README「环境要求」。")
 
     print()
     print(f"  → 请在浏览器里登录选课系统（推荐 Edge 或 Chrome），")
