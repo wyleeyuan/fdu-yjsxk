@@ -434,26 +434,25 @@ def slot_window(release: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
 
 
 def next_slot(now: dt.datetime | None = None) -> tuple[dt.datetime, dt.datetime]:
-    """当天（today）最近一场还没开始放号的开抢窗口，放号点固定为 10:00 / 13:00。
+    """最近一场还没开始放号的开抢窗口，放号点固定为 10:00 / 13:00。
 
-    依次看 今天 10:00 → 今天 13:00，返回第一个放号时刻晚于 now 的场次；
-    已经开始的场次不回头。窗口始终锚定在当天——若今天两场都已过
-    （now 晚于 13:00），回退到今天 13:00 这个放号点（此时窗口已过期，
-    脚本会立即开始），不会顺延到明天。
+    优先看当天：今天 10:00 → 今天 13:00；若当天两场都已过（now 晚于 13:00），
+    顺延到明天：明天 10:00 → 明天 13:00。返回第一个放号时刻晚于 now 的场次；
+    已经开始的场次不回头。
     """
     now = now or dt.datetime.now()
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    for hh in SLOT_HOURS:
-        release = today.replace(hour=hh, minute=0, second=0)
-        if release > now:
-            return slot_window(release)
-    # 今天两场放号都已过 → 回退当天最后一个放号点（用于测试 / 立即开跑）
-    release = today.replace(hour=SLOT_HOURS[-1], minute=0, second=0)
-    return slot_window(release)
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    for day_offset in range(2):
+        day = base + dt.timedelta(days=day_offset)
+        for hh in SLOT_HOURS:
+            release = day.replace(hour=hh, minute=0, second=0)
+            if release > now:
+                return slot_window(release)
+    raise AssertionError("两天内必有一场未开始的放号")  # 逻辑上不可达
 
 
 def default_window(now: dt.datetime | None = None) -> tuple[str, str]:
-    """默认开抢窗口（字符串形式），取当天最近一场还没开始的放号（10:00 / 13:00）。"""
+    """默认开抢窗口（字符串形式），取最近一场还没开始的放号（优先当天，都过了顺延明天）。"""
     start, end = next_slot(now)
     fmt = "%Y-%m-%d %H:%M:%S"
     return start.strftime(fmt), end.strftime(fmt)
