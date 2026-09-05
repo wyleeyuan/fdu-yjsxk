@@ -21,14 +21,10 @@
       其余设置（浏览器、间隔、阈值等）原样保留；原文件先备份一份
       config.json.preselect.bak
     · Cookie 失效时会引导现场登录（同 grab.py --login）
-    · 各列表里看不到的课（如还没获得选课资格、但教学大纲能搜到）可在
-      末尾「手工补充」：粘贴 fdjwgl 教学大纲详情链接，自动解析课程名与
-      课程序号、按当前学期前缀拼好 bjdm 补进待抢列表
 """
 from __future__ import annotations
 
 import datetime as dt
-import html as _html
 import json
 import os
 import re
@@ -225,6 +221,43 @@ def pick_group(title: str, rows: list[dict]) -> list[int]:
             return picked
 
 
+def pick_category(
+    remaining: list[int], lists_: list[tuple[str, int, str, int, list[dict]]]
+) -> int | None:
+    """循环式挑选的一步：展示「还没挑过」的类别，让用户选一个去挑课。
+
+    返回选中的 lists_ 下标；返回 None 表示用户结束挑选（输入 0 或回车）。
+    main 里用它逐轮驱动：每轮挑一个类别、挑完回到本菜单再选下一个，
+    直到结束才进入下一步（开抢时间设置）。
+    """
+    log("")
+    log("=" * 60)
+    log("  选择要挑的课程类别（每轮挑一个，挑完回到这里）")
+    log("=" * 60)
+    for idx in remaining:
+        _group, _lx, label, _bqmc, rows = lists_[idx]
+        log(f"  [{idx + 1}] {label}（{len(rows)} 门）")
+    log("")
+    log("  输入一个类别编号去挑课；挑完会回到本菜单，可继续挑下一个。")
+    log("  输入 0 或直接回车 = 结束挑选（进入开抢时间设置）")
+    while True:
+        raw = input("  挑哪个类别（回车/0=结束）：").strip()
+        if not raw or raw == "0":
+            return None
+        if not raw.isdigit():
+            log(f"  ✗ 无法识别「{raw}」，请输入类别编号")
+            continue
+        i = int(raw)
+        if not (1 <= i <= len(lists_)):
+            log(f"  ✗ 编号 {i} 超出范围（1~{len(lists_)}）")
+            continue
+        idx = i - 1
+        if idx not in remaining:
+            log(f"  ✗ 类别「{lists_[idx][2]}」已经挑过了")
+            continue
+        return idx
+
+
 def to_course(lx: int, bqmc: int, row: dict) -> dict:
     """接口行 → config.json 的 course 条目。
 
@@ -294,233 +327,6 @@ def default_window(now: dt.datetime | None = None) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")
 
 
-# ------------------------------------------------------------ 手工补充 ----
-# 有些课因为还没有选课资格，上面的三类列表里根本看不到，但能通过
-# fdjwgl「教学大纲」公开查询搜到。这里在流程末尾给一次手工补充的机会：
-# 只支持贴一份教学大纲详情链接（fdjwgl.fudan.edu.cn/.../teaching-syllabus/...），
-# 自动解析出「课程名称 + 课程序号（课程代码.班号）」，再按当前学期前缀拼出
-# bjdm 补进待抢列表。其余信息一律不额外询问，保持简单。
-
-FDJWGL_URL_RE = re.compile(r"^https?://", re.I)
-CODE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)$")
-CODE_BAN_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*)\.([0-9]+)$")
-
-# 手工补充时可选的全部子分类（选项数字恰好等于 bqmc，与 config.json 的
-# _字段含义 一致，方便对照）：1/2/3 属学位公共课(lx=7)，4/5/6 属学科专业课
-# (lx=8)，9 属公共选修课(lx=9)。主要用于「暂无选课资格、列表里看不到」的课；
-# 列表里能看到的课建议直接在上面按编号挑，脚本会自动带对 lx/bqmc。
-CATEGORIES = [
-    # (选项数字, bqmc, lx, 类别名)
-    ("1", "1", "7", "政治理论课"),
-    ("2", "2", "7", "第一外国语"),
-    ("3", "3", "7", "专业外语"),
-    ("4", "4", "8", "学位基础课"),
-    ("5", "5", "8", "学位专业课"),
-    ("6", "6", "8", "专业选修课"),
-    ("9", "9", "9", "公共选修课"),
-]
-
-
-def _label_value(page: str, label: str) -> str:
-    """fdjwgl 大纲页里某 label 后面 value div 的文本（该页为服务端渲染，结构稳定）。"""
-    pat = (
-        r'<div[^>]*class="[^"]*base-info-label[^"]*"[^>]*>\s*'
-        + re.escape(label)
-        + r'.*?<div[^>]*class="[^"]*base-info-value[^"]*"[^>]*>\s*(.*?)\s*</div>'
-    )
-    m = re.search(pat, page, re.S)
-    if not m:
-        return ""
-    return _html.unescape(re.sub(r"<[^>]+>", "", m.group(1)).strip())
-
-
-def parse_fdjwgl(url: str, timeout: float) -> tuple[dict | None, str]:
-    """抓取并解析一份 fdjwgl 教学大纲公开页，返回 {name,kcdm,ban}。
-
-    大纲页无需登录；失败返回 (None, 原因)。
-    """
-    try:
-        r = requests.get(url, headers={"User-Agent": grab.UA}, timeout=timeout)
-    except requests.RequestException as exc:
-        return None, f"请求失败：{exc}"
-    if r.status_code != 200:
-        return None, f"页面返回 HTTP {r.status_code}"
-    page = r.text
-    name = _label_value(page, "课程名称（中文）")
-    lesson = _label_value(page, "课程序号")
-    m = CODE_BAN_RE.fullmatch(lesson) or CODE_RE.fullmatch(lesson)
-    if not name or not m:
-        return None, (
-            "页面里没找到「课程名称 / 课程序号」，可能页面结构已改版或链接不是教学大纲详情页，"
-            "请核对链接后重试"
-        )
-    ban = m.group(2) if m.lastindex and m.lastindex >= 2 else ""
-    return {"name": name, "kcdm": m.group(1), "ban": ban}, ""
-
-
-def parse_manual_input(raw: str, timeout: float) -> tuple[dict | None, str]:
-    """把用户在手工补充里输入的一行转成候选课程，只认 fdjwgl 大纲详情链接。
-
-    返回 {"name","kcdm","ban"}（课程名 + 课程序号解析自页面）。
-    """
-    raw = raw.strip()
-    if not FDJWGL_URL_RE.match(raw):
-        return None, (
-            "只支持 fdjwgl「教学大纲」详情页链接，例如\n"
-            "    https://fdjwgl.fudan.edu.cn/manager/teaching-syllabus/open-info/1053822"
-        )
-    return parse_fdjwgl(raw, timeout)
-
-
-def detect_term_prefix(lists_: list, old: dict) -> str | None:
-    """取当前学期前缀（bjdm 前 10 位）：优先看本次拉到的课程，再看旧 config。"""
-    counts: dict[str, int] = {}
-    for _group, _lx, _label, _bqmc, rows in lists_:
-        for r in rows:
-            m = re.match(r"^(\d{10})", str(r.get("BJDM") or ""))
-            if m:
-                counts[m.group(1)] = counts.get(m.group(1), 0) + 1
-    if counts:
-        return max(counts, key=counts.get)
-    for c in (old.get("courses") or []):
-        m = re.match(r"^(\d{10})", str(c.get("bjdm") or ""))
-        if m:
-            return m.group(1)
-    return None
-
-
-def ask_category(default: str = "5") -> tuple[str, str] | None:
-    """问手工补充课程的子分类，返回 (bqmc, lx)；取消返回 None。"""
-    log("")
-    log("  这门课属于哪个子分类？（编号 = config 里的 bqmc）")
-    for num, _bqmc, _lx, cname in CATEGORIES:
-        log(f"    [{num}] {cname}")
-    log("    [7] 其它（手动输入 lx / bqmc，如其它类别 lx=10）")
-    log("    [0] 取消，不加这门")
-    while True:
-        raw = input(f"  子分类 [{default}]：").strip() or default
-        if raw == "0":
-            return None
-        for num, bqmc, lx, _cname in CATEGORIES:
-            if raw == num:
-                return bqmc, lx
-        if raw == "7":
-            lx = input("    lx（课程大类编码，如 7/8/9/10）：").strip()
-            bqmc = input("    bqmc（页签编号，如 5）：").strip()
-            if lx and bqmc:
-                return bqmc, lx
-            log("    ✗ lx / bqmc 不能为空")
-            continue
-        log("    ✗ 请输入 0~9 的数字")
-
-
-def ask_position(total: int, what: str) -> int:
-    """问插入位置（1..total+1），回车默认排最后（优先级最低）。"""
-    while True:
-        raw = input(
-            f"  「{what}」排在待抢列表第几位？（1=最先抢；直接回车=第 {total + 1} 位排最后）："
-        ).strip()
-        if not raw:
-            return total + 1
-        if raw.isdigit() and 1 <= int(raw) <= total + 1:
-            return int(raw)
-        log(f"  ✗ 请输入 1~{total + 1} 的整数")
-
-
-def _compose_entry(cand: dict, prefix: str | None) -> tuple[dict | None, str]:
-    """按解析结果 + 当前学期前缀拼 course 条目，只再问一次子分类。
-
-    cand 必含 name/kcdm/ban（均来自大纲页面）；缺班号或前缀时直接报错返回，
-    不再追问细节，保持简单。
-    """
-    kcdm, ban = cand["kcdm"], cand["ban"]
-    name = (cand.get("name") or "").strip() or kcdm
-    if not ban:
-        return None, "页面课程序号里没有班号（形如 EIE60029.02 才带班号），无法拼 bjdm"
-    if not prefix:
-        return None, (
-            "无法确定学年学期前缀（bjdm 前 10 位）。请先在上面三类里选至少一门课，"
-            "或保留现有 config.json 里的任意一条课程记录，再重跑本步"
-        )
-    bqmc_lx = ask_category()
-    if bqmc_lx is None:
-        return None, "已取消"
-    bqmc, lx = bqmc_lx
-    return {
-        "name": name,
-        "kcdm": kcdm,
-        "bjdm": f"{prefix}{kcdm}.{ban}",
-        "lx": lx,
-        "bqmc": bqmc,
-        "enabled": True,
-    }, ""
-
-
-def add_courses_manually(
-    courses: list, old_courses: list, prefix: str | None, timeout: float = 12.0
-) -> int:
-    """循环接收 fdjwgl 大纲详情链接，解析后按用户给的位置插入 courses。
-
-    旧 config 里已存在同一课程代码的条目时直接复用（bjdm/lx/bqmc 早已抓准），
-    不再重复提问；新课程只问一次子分类和顺位。
-    返回成功添加的门数；全程不写文件，由 main 统一落盘。
-    """
-    log("")
-    log("=" * 60)
-    log("  手工补充：课程列表里看不到的课")
-    log("=" * 60)
-    log("  适用：暂时没有选课资格、上面列表里看不到，但想先占位/到点就抢的课")
-    log("  把 fdjwgl「教学大纲」详情页链接粘贴进来即可（可多门，逐行粘贴），例如：")
-    log("    https://fdjwgl.fudan.edu.cn/manager/teaching-syllabus/open-info/1053822")
-    log("  程序会解析课程名与课程序号，自动按当前学期前缀拼好 bjdm；输完直接回车结束")
-    seen = {c.get("kcdm") for c in courses if c.get("kcdm")}
-    old_by_code: dict[str, dict] = {}
-    for c in old_courses:
-        if c.get("kcdm") and c["kcdm"] not in old_by_code:
-            old_by_code[c["kcdm"]] = c
-    added = 0
-    n = 1
-    while True:
-        log("")
-        try:
-            raw = input(f"第 {n} 门（fdjwgl 教学大纲链接，直接回车结束）：").strip()
-        except EOFError:
-            raise  # 交给顶层统一收尾
-        if not raw:
-            break
-        cand, err = parse_manual_input(raw, timeout)
-        if not cand:
-            log(f"  ✗ {err}")
-            continue
-        kcdm, ban = cand["kcdm"], cand["ban"]
-        if kcdm in seen:
-            log(f"  ✗ {kcdm} 已在待抢列表里（或本次刚加入过），跳过")
-            continue
-        legacy = old_by_code.get(kcdm)
-        if legacy:
-            log(f"  检测到旧 config 里已有这门课，直接复用原条目（重新启用）：")
-            log(f"    {legacy.get('name') or kcdm}  bjdm={legacy.get('bjdm')}"
-                f"  lx={legacy.get('lx')} bqmc={legacy.get('bqmc')}")
-            entry = dict(legacy)
-            entry["enabled"] = True
-        else:
-            entry, why = _compose_entry(cand, prefix)
-            if entry is None:
-                log(f"  ✗ {why}")
-                continue
-        log("")
-        log(f"  将加入：{entry['name']} [{entry['kcdm']}]")
-        log(f"    bjdm={entry['bjdm']}   lx={entry['lx']} bqmc={entry['bqmc']}（参与抢课）")
-        pos = ask_position(len(courses), entry["name"])
-        courses.insert(pos - 1, entry)
-        seen.add(kcdm)
-        added += 1
-        n += 1
-        log(f"  ✓ 已{'复用' if legacy else '补入'}并排到第 {pos} 位"
-            f"（资格未开放时服务器会拒收，脚本会自动一直重试到放号/收工）")
-    return added
-
-
 def main() -> int:
     log("复旦研究生选课 · 预选课助手")
     log(f"项目目录：{BASE_DIR}")
@@ -544,45 +350,58 @@ def main() -> int:
     # ---- 2. 拉课程 ----
     log("正在从选课系统拉取课程 ...")
     lists_ = fetch_lists(cookie, timeout=float(cfg.get("http_timeout", 12)))
-    log("")
-    log("提示：类别按 学科专业课 → 学位公共课 → 公共选修课 顺序展示；")
-    log("      跨类别挑选时，先展示的类别会先进入待抢列表（config 顺序 = 抢课优先级）")
-    log("")
 
-    # ---- 3. 逐类选择 ----
+    # ---- 3. 已有课程展示 + 覆盖确认 ----
+    old_courses = [dict(c) for c in (old.get("courses") or [])]
     courses: list[dict] = []
     skipped_no_bjdm = 0
-    for group, lx, label, bqmc, rows in lists_:
-        picked = pick_group(f"{group} · {label}（自动写入 lx={lx} bqmc={bqmc}）", rows)
-        added = 0
-        for i in picked:
-            row = rows[i - 1]
-            if not row.get("BJDM"):
-                log(f"  ⚠ {row.get('KCMC', '（未命名）')} 没有班级代码，已跳过（服务器未提供该班次）")
-                skipped_no_bjdm += 1
-                continue
-            courses.append(to_course(lx, bqmc, row))
-            added += 1
-        if added:
-            log(f"  ✓ {label}：已选 {added} 门")
-    if skipped_no_bjdm:
-        log(f"⚠ 共 {skipped_no_bjdm} 个无班级代码的班次被跳过")
+    skip_pick = False
+    if old_courses:
+        log("")
+        log("检测到上一轮预选的课程：")
+        for i, c in enumerate(old_courses, 1):
+            mark = "✓" if c.get("enabled", True) else "✗ 已停用"
+            log(f"  {i:2d}. [{c.get('kcdm')}] {c.get('name')}（{c.get('bjdm')}）"
+                f" lx={c.get('lx')} bqmc={c.get('bqmc')} {mark}")
+        log("")
+        ans = input("是否覆盖更新这些课程？[Y/n]（n=保留现有，跳过重新挑选）：").strip()
+        if ans.lower() in ("n", "no"):
+            courses = old_courses
+            skip_pick = True
+            log("✓ 保留上一轮预选的课程，跳过类别挑选。")
+        else:
+            log("将清空上一轮课程，重新挑选。")
 
-    # ---- 3.5 手工补充：列表里看不到的课（如暂无选课资格）----
-    prefix = detect_term_prefix(lists_, old)
-    added_manual = add_courses_manually(
-        courses,
-        old.get("courses") or [],
-        prefix,
-        timeout=float(cfg.get("http_timeout", 12)),
-    )
+    # ---- 3.1 逐类选择（循环式：每轮挑一个类别，挑完回到菜单，0/回车结束）----
+    if not skip_pick:
+        remaining = list(range(len(lists_)))
+        while remaining:
+            idx = pick_category(remaining, lists_)
+            if idx is None:
+                break
+            remaining.remove(idx)
+            group, lx, label, bqmc, rows = lists_[idx]
+            picked = pick_group(f"{group} · {label}（自动写入 lx={lx} bqmc={bqmc}）", rows)
+            added = 0
+            for i in picked:
+                row = rows[i - 1]
+                if not row.get("BJDM"):
+                    log(f"  ⚠ {row.get('KCMC', '（未命名）')} 没有班级代码，已跳过（服务器未提供该班次）")
+                    skipped_no_bjdm += 1
+                    continue
+                courses.append(to_course(lx, bqmc, row))
+                added += 1
+            if added:
+                log(f"  ✓ {label}：已选 {added} 门")
+        if skipped_no_bjdm:
+            log(f"⚠ 共 {skipped_no_bjdm} 个无班级代码的班次被跳过")
 
     log("")
     log("=" * 60)
     if not courses:
         log("你一门都没选，已取消，未写入 config.json")
         return 0
-    log(f"共选 {len(courses)} 门（顺序即抢课优先级，含手工补充 {added_manual} 门）：")
+    log(f"共选 {len(courses)} 门（顺序即抢课优先级）：")
     for i, c in enumerate(courses, 1):
         log(f"  {i:2d}. [{c['kcdm']}] {c['name']}（{c['bjdm']}）")
     log("")

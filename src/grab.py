@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-复旦大学研究生选课脚本（2026 版重写）
-
-原仓库 JarynWong/fdu_course_enrollment 的 course.py 基于 2024 年协议，
-在当前（2026）系统上已失效，本文件按 courses.js 的真实逻辑重写。
-
-原实现对不上的地方：
-  1. csrfToken 正则：原用 value='...' 单引号，现页面是 value="..." 双引号且 id 前有 style 属性
-     —— 原脚本永远取不到 token，会一直误报"cookies过期"。
-  2. 选课是异步两步：choiceCourse.do 只返回受理号 xid（code!=0 不代表选上），
-     必须再轮询 loadXkjgRes.do，拿到 {code:1} 才是真的选上。
-     原脚本 code!=0 就打印"提交选课成功"并退出，会漏课。
+复旦大学研究生选课脚本
 
 用法：
     python src/grab.py            正常跑（会等到 start_time 再开始）
@@ -445,7 +435,7 @@ def load_config() -> dict:
 
 
 def wait_until(target: dt.datetime, label: str) -> None:
-    """等到 target；超时不自动 +1 天（原脚本会静默等到明天）。"""
+    """等到 target；超时不自动 +1 天。"""
     while True:
         remain = (target - dt.datetime.now()).total_seconds()
         if remain <= 0:
@@ -625,19 +615,62 @@ def _save_cookie(cookie: str) -> None:
     log(f"✓ Cookie 已保存到 {os.path.basename(COOKIE_PATH)}（作为抢课时的后备）")
 
 
+# macOS 上各浏览器对应的 .app 名（open -a 用）。
+# 不用 webbrowser.get("edge")：Python 的 webbrowser 在 macOS 上没有 edge
+# 控制器，实测抛 could not locate runnable browser，所以统一走 open -a。
+MAC_APP_NAMES = {"edge": "Microsoft Edge", "chrome": "Google Chrome"}
+
+
+def _open_in_browser(url: str, chain: list[str]) -> str | None:
+    """用 config 配好的浏览器打开 url；返回实际使用的浏览器名，失败返回 None。
+
+    必须显式指定浏览器而不是用系统默认：macOS 的默认浏览器可能是 Safari，
+    而脚本读不到 Safari 的 Cookie（沙盒 + TCC 限制，实测 PermissionError），
+    用户在 Safari 里登录等于白登录一场。统一走 open -a 可保证
+    「登录用的浏览器」与「脚本读取的浏览器」是同一个。
+
+    只处理 macOS；其它平台直接返回 None，由调用方回退原逻辑。
+    """
+    if sys.platform != "darwin":
+        return None
+    import subprocess
+
+    for name in chain:
+        app = MAC_APP_NAMES.get(name)
+        if not app or not os.path.isdir(f"/Applications/{app}.app"):
+            continue
+        try:
+            subprocess.run(["open", "-a", app, url], check=True, timeout=15)
+            return name
+        except Exception:
+            continue
+    return None
+
+
 def cmd_login(cfg: dict) -> str:
     """现场登录：打开浏览器 → 用户登录 → 回车 → 验证 → 保存 cookie.txt。
 
     返回验证通过的 Cookie 字符串；验证失败抛 CookieError。
     """
     url = f"http://{cfg.get('target', DOMAIN)}{APP_ENTRY}"
-    log(f"正在打开浏览器：{url}")
-    log("  （若未登录会自动跳到复旦统一认证，登录后回到选课页）")
-    try:
-        import webbrowser
-        webbrowser.open(url)  # 打开系统默认浏览器
-    except Exception as exc:
-        log(f"（自动打开浏览器失败：{exc}，请手动打开上面的网址）")
+    used = _open_in_browser(url, _browser_chain(cfg.get("browser", "edge")))
+    if used:
+        log(f"正在用 {MAC_APP_NAMES[used]} 打开：{url}")
+        log("  （若未登录会自动跳到复旦统一认证，登录后回到选课页）")
+    else:
+        # 指定浏览器没起来（非 macOS / 未安装 / open 失败）：退回系统默认
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+        except Exception as exc:
+            log(f"（自动打开浏览器失败：{exc}，请手动打开上面的网址）")
+        log(f"正在用系统默认浏览器打开：{url}")
+        log("  （若未登录会自动跳到复旦统一认证，登录后回到选课页）")
+        log("")
+        log("  ⚠️ 若弹出的不是 Edge / Chrome（例如 macOS 的 Safari），请把上面的网址")
+        log("    复制到 Edge 或 Chrome 里登录 —— 脚本读不到 Safari 的 Cookie。")
+        log("    在哪个浏览器登录，脚本就得从哪个浏览器读，两边必须一致。")
 
     print()
     print(f"  → 请在浏览器里登录选课系统（推荐 Edge 或 Chrome），")
