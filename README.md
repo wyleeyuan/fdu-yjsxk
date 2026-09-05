@@ -24,29 +24,11 @@ fdu-yjsxk/
 
 - **Python 3.9+**（推荐 3.10 ~ 3.13，3.13 实测可用）
 - 依赖包只有两个：`requests`、`browser-cookie3`，见 `requirements.txt`
-- **macOS：登录和抢课全程用 Edge 或 Chrome，不要用 Safari**（原因见下）
-- **Windows：读浏览器 Cookie 前先【完全退出】Chrome / Edge**（原因见下，不用管理员权限也行）
+- **浏览器：请用 Edge 或 Chrome**（登录与读取需是同一个浏览器）
 
 ```bash
 pip install -r requirements.txt
 ```
-
-> **为什么 Safari 不行**：脚本靠 `browser-cookie3` 直接读浏览器的本地 Cookie 库取
-> `JSESSIONID` / `_WEU`。Safari 是沙盒应用，Cookie 存在
-> `~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies`，
-> 该路径受 macOS 隐私保护（TCC）管辖，终端 / Python 默认无权读取，实测直接报
-> `PermissionError: Operation not permitted`——除非单独给终端授予「完全磁盘访问权限」。
-> Edge / Chrome 的 Cookie 库（`~/Library/Application Support/.../Default/Cookies`）没有
-> 这层沙盒，脚本可以直接读。所以**登录和抢课全程用 Edge 或 Chrome 即可**。
-
-> **为什么 Windows 会报 "This operation requires admin" / 读不到**：Chrome / Edge 在运行时会
-> 把各自的 Cookie 库（`%LOCALAPPDATA%\Microsoft\Edge\User Data\...\Network\Cookies`、
-> `%LOCALAPPDATA%\Google\Chrome\User Data\...\Network\Cookies`）**锁住**，此时
-> `browser-cookie3` 读取会被系统要求管理员权限或直接读不到。**解决办法（任选其一，推荐第 1 种）**：
-> 1. 跑自检 / 抢课前先**完全退出 Chrome 和 Edge**——注意关窗口后可能还留在托盘或后台
->    （任务管理器里确认 `msedge.exe` / `chrome.exe` 已结束）；
-> 2. 在本窗口右键「以管理员身份运行」（管理员终端能绕过锁定，但不是必需的）。
-> 与 macOS 同理：**在哪个浏览器登录，脚本就得从哪个浏览器读**，两边必须一致。
 
 ## 快速开始
 
@@ -62,10 +44,6 @@ pip install -r requirements.txt
 ```
 http://yjsxk.fudan.edu.cn/yjsxkapp/sys/xsxkappfudan/xsxkHome/gotoChooseCourse.do
 ```
-
-> ⚠️ **macOS 注意**：这里打开的是你的**系统默认浏览器**。若默认是 Safari，请把网址
-> 复制到 **Edge 或 Chrome** 里登录——脚本读不到 Safari 的 Cookie（见上方「环境要求」）。
-> **在哪个浏览器登录，脚本就得从哪个浏览器读**，两边必须一致。
 
 未登录时会自动跳到复旦统一身份认证（UIS），登录成功后自动回到选课页面。
 在浏览器里完成登录后回到终端**回车确认**，脚本会自动等待 Cookie 落盘并验证保存
@@ -163,8 +141,8 @@ python src/grab.py --probe     # 链路演练：发 1 次真实请求看服务�
 少数情况才需要打开文件微调：
 
 - `enabled: false` —— 某门课这轮不抢（例如已经选上），预选课会原样保留这个开关
-- `browser` —— 从哪些浏览器读登录 Cookie，默认 `["edge", "chrome"]` 按顺序尝试。
-  目前只支持 Edge / Chrome（macOS 上 Safari 受系统沙盒限制读不到，见「环境要求」）
+- `browser` —— 从哪些浏览器读登录 Cookie，默认 `["edge", "chrome"]` 按顺序尝试，
+  目前只支持 Edge / Chrome
 - `full_max_tries` —— 满课放弃阈值：一门课连续满员 N 次自动放弃（默认 3），`0` = 永不放弃
 - `serial_mode` —— 务必保持 `true`（结果轮询是单例的，并发会丢结果）
 
