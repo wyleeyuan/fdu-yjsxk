@@ -558,6 +558,25 @@ def _obtain_verified(cfg: dict) -> str:
     raise CookieError(f"所有来源均失效（{last_err}）")
 
 
+def _relogin_after_failure(cfg: dict) -> str | None:
+    """取 Cookie 失败后的现场登录兜底。
+
+    交互环境问用户是否现在重登，是则走 cmd_login（浏览器重开 + 回车后
+    自动重读最多 LOGIN_WAIT 秒 / 约 20 次）；成功返回新 Cookie，失败或
+    拒绝/非交互返回 None（调用方负责打印提示并退出）。
+    """
+    if not _ask_relogin(cfg):
+        log("提示：可运行 python src/grab.py --login 现场登录一次，或双击「scripts/选课助手」选 1 自检")
+        return None
+    try:
+        cookie = cmd_login(cfg)
+    except CookieError as exc:
+        log(f"✗ 现场登录仍失败：{exc}")
+        return None
+    log("✓ 现场登录成功，Cookie 已验证有效")
+    return cookie
+
+
 def run(cfg: dict, start_now: bool) -> int:
     interval = float(cfg.get("request_interval", 0.8))
     refresh_secs = float(cfg.get("cookie_refresh_secs", 240))
@@ -575,20 +594,29 @@ def run(cfg: dict, start_now: bool) -> int:
         return 0
 
     # ---- 取 Cookie 并自检（文件失效自动改试浏览器，全程现场验证）----
+    # 失败时交互环境可现场登录重试（cmd_login 内自动重读约 1 分钟）
     log("正在获取 Cookie ...")
     try:
         cookie = _obtain_verified(cfg)
     except CookieError as exc:
         log(f"✗ 取 Cookie 失败：{exc}")
-        log("提示：可运行 python src/grab.py --login 现场登录一次，或双击「scripts/选课助手」选 1 自检")
-        return 1
+        cookie = _relogin_after_failure(cfg)
+        if cookie is None:
+            return 1
     gr = Grabber(cfg, cookie)
     try:
         gr.refresh_token()
     except CookieError as exc:
         log(f"✗ Cookie 已失效：{exc}")
-        log("提示：登录态已过期。先运行 python src/grab.py --login 重新登录，再回来抢课")
-        return 1
+        cookie = _relogin_after_failure(cfg)
+        if cookie is None:
+            return 1
+        gr = Grabber(cfg, cookie)
+        try:
+            gr.refresh_token()
+        except CookieError as exc2:
+            log(f"✗ 现场登录后 Cookie 仍无效：{exc2}")
+            return 1
     log(f"Cookie 有效，csrfToken = {gr.token[:8]}...")
 
     if start_now:
@@ -754,28 +782,39 @@ def cmd_login(cfg: dict) -> str:
     login_cfg["cookie_source"] = "browser"
 
     # UIS 登录跳转完成后，_WEU 等关键字段可能延迟落盘到浏览器 Cookie 库
-    # （实测有时要数十秒）。人在场时自动重读：最多等 LOGIN_WAIT 秒、每
-    # LOGIN_INTERVAL 秒读一次并显示倒计时；非交互环境只读一次直接报错。
+    # （实测有时要数十秒），极端情况跳转瞬间连一条都还没写入。人在场时
+    # 自动重读：每 LOGIN_INTERVAL 秒读一次、最长等 LOGIN_WAIT 秒
+    # （约 20 次机会）并显示倒计时；非交互环境只读一次直接报错。
     deadline = time.monotonic() + LOGIN_WAIT if waited else None
     reads = 0
     while True:
         reads += 1
-        cookie = obtain_cookie(login_cfg)
-        names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
-        missing = {"JSESSIONID", "_WEU"} - set(names)
-        if not missing:
-            break
+        try:
+            cookie = obtain_cookie(login_cfg)
+        except CookieError as exc:
+            # 一条都还没读到（浏览器 Cookie 库还没写入本站 Cookie）：
+            # 视为尚未就绪，同样进入等待重试，不立即报错。
+            cookie = ""
+            note = f"尚未读到该站点的 Cookie（{exc}）"
+        if cookie:
+            names = [seg.strip().split("=")[0] for seg in cookie.split(";") if "=" in seg]
+            missing = {"JSESSIONID", "_WEU"} - set(names)
+            note = "缺 " + ", ".join(sorted(missing)) if missing else ""
+            if not missing:
+                break
+        else:
+            missing = {"JSESSIONID", "_WEU"}
         if deadline is None or time.monotonic() >= deadline:
             hint = (
-                f"等待 {LOGIN_WAIT} 秒仍未补全。请确认已在弹出的浏览器里完成登录"
+                f"等满 {LOGIN_WAIT} 秒仍未就绪（{note}）。请确认已在弹出的浏览器里完成登录"
                 f"（能看到选课页面），然后重跑一次 --login"
                 if waited
                 else "请先运行 python src/grab.py --login 现场登录（当前为非交互环境）"
             )
-            raise CookieError(f"未读到完整登录态（缺 {', '.join(missing)}）。{hint}")
+            raise CookieError(f"登录后 Cookie 未就绪：{note}。{hint}")
         _countdown(
             min(LOGIN_INTERVAL, deadline - time.monotonic()),
-            f"关键字段尚未落盘（缺 {', '.join(missing)}），自动重试第 {reads} 次",
+            f"{note}，自动重试第 {reads} 次",
         )
 
     gr = Grabber(cfg, cookie)
