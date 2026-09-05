@@ -458,21 +458,28 @@ def default_window(now: dt.datetime | None = None) -> tuple[str, str]:
     return start.strftime(fmt), end.strftime(fmt)
 
 
-def _create_config() -> dict:
-    """首次运行：拿 config.example.json 当模板生成一份空配置。
+# 首次运行自动生成 config.json 时用的内置默认设置（不再依赖示例文件模板）。
+_DEFAULT_CFG = {
+    "target": DOMAIN,
+    "cookie_source": "auto",
+    "browser": "edge",
+    "cookie_refresh_secs": 240,
+    "request_interval": 0.8,
+    "poll_interval": 0.6,
+    "poll_max": 15,
+    "http_timeout": 12,
+    "serial_mode": True,
+    "full_max_tries": 3,
+}
 
-    课程列表留空（示例里的课程只是格式示范，不能直接拿去抢），开抢窗口
-    取最近一场放号，保证生成的时间永远在未来。
+
+def _create_config() -> dict:
+    """首次运行：没有 config.json 时直接生成一份空配置（内置默认设置）。
+
+    课程列表留空（先跑 preselect.py 预选课填课），开抢窗口取最近一场
+    放号（优先当天 10:00/13:00，两场都过了顺延明天），保证在未来。
     """
-    example = os.path.join(BASE_DIR, "config.example.json")
-    cfg: dict = {}
-    if os.path.exists(example):
-        try:
-            with open(example, encoding="utf-8") as fh:
-                cfg = json.load(fh)
-        except Exception as exc:
-            log(f"⚠ {os.path.basename(example)} 解析失败（{exc}），改用内置默认设置")
-    cfg["target"] = cfg.get("target") or DOMAIN
+    cfg = dict(_DEFAULT_CFG)
     cfg["courses"] = []
     cfg["start_time"], cfg["end_time"] = default_window()
     with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
@@ -481,7 +488,7 @@ def _create_config() -> dict:
 
 
 def load_config() -> dict:
-    """读 config.json；不存在时按模板自动创建一份（课程列表为空）。"""
+    """读 config.json；不存在时自动创建一份（课程列表为空）。"""
     if not os.path.exists(CONFIG_PATH):
         try:
             cfg = _create_config()

@@ -13,7 +13,6 @@ fdu-yjsxk/
 │   └── preselect.py      预选课脚本（拉课程列表 → 生成 config.json）
 ├── scripts/              Windows(.bat) + macOS(.command) 一键双击脚本
 │   └── 选课助手.command / .bat   三合一菜单：1 自检 / 2 预选课 / 3 抢课
-├── config.example.json   配置模板（入库，给首次使用者参考）
 ├── requirements.txt      Python 依赖
 └── README.md
 ```
@@ -147,9 +146,9 @@ python src/grab.py --probe     # 链路演练：发 1 次真实请求看服务�
 脚本每次写回前都会把旧文件备份为 `config.json.preselect.bak`（已 gitignore）。
 `bjdm`（班级代码）、`lx` / `bqmc`（分类编码）、开抢窗口都由脚本自动抓好写入。
 
-首次运行（直接跑 `grab.py` 或 `preselect.py`）若发现没有 `config.json`，会拿
-`config.example.json` 当模板自动创建一份**课程列表为空**的配置，并把开抢窗口设成
-最近一场放号（优先当天 10:00/13:00，当天两场都过了则顺延明天），无需手动 `cp`。之后用 `preselect.py` 预选课即可。
+首次运行（直接跑 `grab.py` 或 `preselect.py`）若发现没有 `config.json`，会用内置默认设置
+自动创建一份**课程列表为空**的配置，并把开抢窗口设成最近一场放号（优先当天 10:00/13:00，
+当天两场都过了则顺延明天），无需手动建文件。之后用 `preselect.py` 预选课即可。
 
 少数情况才需要打开文件微调：
 

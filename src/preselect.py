@@ -71,7 +71,7 @@ QUERY_BODY = (
     "&pageSize=500&sortField=&sortOrder="
 )
 
-# 首次运行（无 config.json）时的默认设置，与 grab.py / config.example 对齐
+# 首次运行（无 config.json）时的默认设置，与 grab.py 内置默认对齐
 DEFAULT_CFG = {
     "target": grab.DOMAIN,
     "cookie_source": "auto",
